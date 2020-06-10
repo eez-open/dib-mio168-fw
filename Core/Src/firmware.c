@@ -5,11 +5,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #define FIRMWARE_VERSION_MAJOR 0x00
-#define FIRMWARE_VERSION_MINOR 0x02
+#define FIRMWARE_VERSION_MINOR 0x04
 
 ////////////////////////////////////////////////////////////////////////////////
 
-extern SPI_HandleTypeDef hspi2;
+extern SPI_HandleTypeDef hspi4;
 extern CRC_HandleTypeDef hcrc;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -56,7 +56,7 @@ void slaveSynchro(void) {
 		rxBuffer[0] = 0;
 
 		transferCompleted = 0;
-        if (HAL_SPI_TransmitReceive_DMA(&hspi2, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer)) != HAL_OK) {
+        if (HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer)) != HAL_OK) {
         	continue;
         }
 		while (!transferCompleted);
@@ -161,7 +161,7 @@ void beginTransfer() {
 
     *output_CRC = CRC_Calculate(&hcrc, output, BUFFER_SIZE - 4);
 
-    HAL_SPI_TransmitReceive_DMA(&hspi2, output, input, BUFFER_SIZE);
+    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
