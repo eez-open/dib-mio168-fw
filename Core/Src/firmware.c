@@ -4,28 +4,24 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define FIRMWARE_VERSION_MAJOR 0x00
-#define FIRMWARE_VERSION_MINOR 0x04
-
-////////////////////////////////////////////////////////////////////////////////
-
+extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi2;
 extern SPI_HandleTypeDef hspi4;
-extern CRC_HandleTypeDef hcrc;
+extern TIM_HandleTypeDef htim4;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define BUFFER_SIZE 20
+#define BUFFER_SIZE 16
 
 uint8_t output[BUFFER_SIZE];
 uint8_t input[BUFFER_SIZE];
 
-uint32_t *output_CRC = (uint32_t *)(output + BUFFER_SIZE - 4);
-
-int transferCompleted;
-
-int loopOperationIndex;
+volatile int transferCompleted;
 
 uint8_t outputPinStates = 0;
+
+volatile int adcTransferCompleted = 1;
+uint16_t analogInputs[4] = { 0, 0, 0, 0 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -125,71 +121,199 @@ void updateOutputPinStates(uint8_t newOutputPinStates) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void loopOperation_Dummy() {
+uint16_t adcStep = 0;
+uint8_t adcIn[4] = { 0x00, 0x00, 0x00, 0x00 };
+uint8_t adcOut[4] = { 0x00, 0x00, 0x00, 0x00 };
+
+void ADC_Setup() {
+    HAL_GPIO_WritePin(VOLT_SW0_GPIO_Port, VOLT_SW0_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(VOLT_SW1_GPIO_Port, VOLT_SW1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(VOLT_SW2_GPIO_Port, VOLT_SW2_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(VOLT_SW3_GPIO_Port, VOLT_SW3_Pin, GPIO_PIN_SET);
+
+    HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_SET);
 }
 
-typedef void (*LoopOperation)();
+void ADC_Loop() {
+	if (adcTransferCompleted) {
+		adcTransferCompleted = 0;
+		HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_SET);
 
-LoopOperation loopOperations[] = {
-	loopOperation_Dummy
-};
+		analogInputs[adcStep % 4] = (adcOut[2] << 8) | adcOut[3];
 
-static const int NUM_LOOP_OPERATIONS = sizeof(loopOperations) / sizeof(LoopOperation);
+		adcStep++;
+
+		adcIn[0] = 0xC0 + (adcStep % 4) * 4;
+
+	    HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_RESET);
+		HAL_SPI_TransmitReceive_DMA(&hspi2, adcIn, adcOut, 4);
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// DAC7563
+
+uint16_t dacStep = 0;
+
+void DACDual_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
+    uint8_t buf[3] = { b0, b1, b2 };
+    HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, buf, 3, 100);
+    HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_SET);
+}
+
+void DACDual_Setup() {
+    // Enable internal reference
+	DACDual_SpiWrite(0b00111000, 0x00, 0x01);
+    // Set gain x1
+	DACDual_SpiWrite(0b00000010, 0x00, 0x03);
+}
+
+void DACDual_Loop() {
+    dacStep += 16;
+
+    // DAC7563
+    DACDual_SpiWrite(0b00011111, dacStep >> 8, dacStep & 0xFF);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// This MCU doesn't support CRC_INPUTDATA_FORMAT_BYTES (!?).
-// This works as CRC_INPUTDATA_FORMAT_BYTES except bufferLength must be multiply of 4,
-// i.e. make sure (BUFFER_SIZE - 4) is multiply of 4
-uint32_t CRC_Calculate(CRC_HandleTypeDef *hcrc, uint8_t *buffer, uint32_t bufferLength) {
-	hcrc->State = HAL_CRC_STATE_BUSY;
-	__HAL_CRC_DR_RESET(hcrc);
+void DAC1_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
+    uint8_t buf[3] = { b0, b1, b2 };
+    HAL_SPI_Transmit(&hspi1, buf, 3, 100);
+    HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_RESET);
+  }
 
-	for (uint32_t i = 0; i < bufferLength; i += 4) {
-		hcrc->Instance->DR = (buffer[i] << 24) | (buffer[i + 1] << 16) | (buffer[i + 2] << 8) | (buffer[i + 3]);
-	}
-	uint32_t result = hcrc->Instance->DR;
+void DAC1_Setup() {
+    // DAC7760
 
-	hcrc->State = HAL_CRC_STATE_READY;
+	// Control register: OUTEN=1, RANGE=001
+	// RANGE=000 (0 - 5 V)
+	// RANGE=001 (0 - 10 V)
+	// RANGE=010 (-5 V - 5 V)
+	// RANGE=011 (-10 V - 10 V)
+	DAC1_SpiWrite(0x55, 0b00010000, 0b00000000);
 
-	return result;
+	// Config register:
+	DAC1_SpiWrite(0x57, 0b00000000, 0b00000000);
+
+	// Write data
+	uint16_t dacValue = 65535;
+	DAC1_SpiWrite(0x01, dacValue >> 8, dacValue & 0xFF);
 }
+
+void DAC1_Loop() {
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+void DAC2_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
+    uint8_t buf[3] = { b0, b1, b2 };
+    HAL_SPI_Transmit(&hspi1, buf, 3, 100);
+    HAL_GPIO_WritePin(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin, GPIO_PIN_RESET);
+}
+
+void DAC2_Setup() {
+    // DAC7760
+
+	// Control register: OUTEN=1
+	// RANGE=000 (0 - 5 V)
+	// RANGE=001 (0 - 10 V)
+	// RANGE=010 (-5 V - 5 V)
+	// RANGE=011 (-10 V - 10 V)
+	// RANGE=111 (0 mA to 24 mA)
+	DAC2_SpiWrite(0x55, 0b00010000, 0b00000111);
+
+	// Config register:
+	DAC2_SpiWrite(0x57, 0b00000000, 0b00000000);
+
+	// Write data
+	uint16_t dacValue = 65535;
+	DAC2_SpiWrite(0x01, dacValue >> 8, dacValue & 0xFF);
+}
+
+void DAC2_Loop() {
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+void PWM_Setup() {
+	HAL_GPIO_WritePin(OUT_EN_GPIO_Port, OUT_EN_Pin, GPIO_PIN_SET);
+	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+}
+
+void PWM_Loop() {
+}
+
+////////////////////////////////////////////////////////////////////////////////
 
 void beginTransfer() {
     output[0] = readDataInputs();
     output[1] = outputPinStates;
 
-    *output_CRC = CRC_Calculate(&hcrc, output, BUFFER_SIZE - 4);
+	uint16_t *outputU16 = (uint16_t *)(output + 2);
+	outputU16[0] = analogInputs[0];
+	outputU16[1] = analogInputs[1];
+	outputU16[2] = analogInputs[2];
+	outputU16[3] = analogInputs[3];
 
     HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
-	transferCompleted = 1;
+	if (hspi == &hspi4) {
+		transferCompleted = 1;
+	} else {
+		adcTransferCompleted = 1;
+	}
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
-    transferCompleted = 1;
+	if (hspi == &hspi4) {
+		transferCompleted = 1;
+	} else {
+		adcTransferCompleted = 1;
+	}
 }
 
-void setup() {
-    slaveSynchro();
+////////////////////////////////////////////////////////////////////////////////
 
-    beginTransfer();
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+void setup() {
+	//
+	ADC_Setup();
+    DACDual_Setup();
+    DAC1_Setup();
+    DAC2_Setup();
+    PWM_Setup();
+    //
+
+    slaveSynchro();
 }
 
 void loop() {
-    if (transferCompleted) {
-        transferCompleted = 0;
+    beginTransfer();
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 
-        updateOutputPinStates(input[1]);
+    //
 
-        beginTransfer();
+	ADC_Loop();
+	DACDual_Loop();
+	DAC1_Loop();
+	DAC2_Loop();
+	PWM_Loop();
+
+	//
+
+    while (!transferCompleted) {
     }
+    transferCompleted = 0;
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 
-    LoopOperation loopOperation = loopOperations[loopOperationIndex];
-    loopOperationIndex = (loopOperationIndex + 1) % NUM_LOOP_OPERATIONS;
-    loopOperation();
+    //
+	updateOutputPinStates(input[1]);
+	//
 }
 

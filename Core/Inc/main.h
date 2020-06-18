@@ -60,8 +60,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define ADC_IRQ_Pin GPIO_PIN_3
-#define ADC_IRQ_GPIO_Port GPIOE
 #define TEMP_SW_1_Pin GPIO_PIN_13
 #define TEMP_SW_1_GPIO_Port GPIOC
 #define TEMP_SW_2_Pin GPIO_PIN_14
@@ -120,6 +118,16 @@ void Error_Handler(void);
 #define DIB_IRQ_GPIO_Port GPIOB
 #define OUT_EN_Pin GPIO_PIN_11
 #define OUT_EN_GPIO_Port GPIOB
+#define ADC_CS_Pin GPIO_PIN_12
+#define ADC_CS_GPIO_Port GPIOB
+#define ADC_SCLK_Pin GPIO_PIN_13
+#define ADC_SCLK_GPIO_Port GPIOB
+#define ADC_MISO_Pin GPIO_PIN_14
+#define ADC_MISO_GPIO_Port GPIOB
+#define ADC_MOSI_Pin GPIO_PIN_15
+#define ADC_MOSI_GPIO_Port GPIOB
+#define ADC_IRQ_Pin GPIO_PIN_8
+#define ADC_IRQ_GPIO_Port GPIOD
 #define DIB_SYNC_Pin GPIO_PIN_11
 #define DIB_SYNC_GPIO_Port GPIOD
 #define PWM1_Pin GPIO_PIN_12
