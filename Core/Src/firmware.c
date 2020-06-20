@@ -2,6 +2,10 @@
 
 #include "main.h"
 
+// #define INT_METHOD
+#define DMA_METHOD
+// #define NO_DMA_METHOD
+
 ////////////////////////////////////////////////////////////////////////////////
 
 extern SPI_HandleTypeDef hspi1;
@@ -106,8 +110,8 @@ void updateOutputPinStates(uint8_t newOutputPinStates) {
 ////////////////////////////////////////////////////////////////////////////////
 // ADC8674
 
-uint8_t adcIn[4] = { 0x00, 0x00, 0x00, 0x00 };
-uint8_t adcOut[4] = { 0x00, 0x00, 0x00, 0x00 };
+volatile uint8_t adcIn[4] = { 0x00, 0x00, 0x00, 0x00 };
+volatile uint8_t adcOut[4] = { 0x00, 0x00, 0x00, 0x00 };
 
 SPI_HandleTypeDef *ADC_hspi = &hspi2;
 
@@ -215,9 +219,6 @@ __STATIC_FORCEINLINE void ADC_Transfer() {
 		*ADC_DMA_TX_CR |= DMA_IT_TC | DMA_IT_TE | DMA_IT_DME | DMA_SxCR_EN;
 	}
 
-	// Enable SPI peripheral
-	*ADC_SPI_CR1 |= SPI_CR1_SPE;
-
 	// RESET ADC CS
 	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U;
 
@@ -293,15 +294,25 @@ void ADC_Setup() {
 
     ADC_DMA_Config();
 
+	// Enable SPI peripheral
+	*ADC_SPI_CR1 |= SPI_CR1_SPE;
+
     switchBuffer();
 
     adcIn[0] = 0xC4;
+
+#if defined(INT_METHOD)
     ADC_Transfer();
+#endif
 }
 
 void ADC_Loop() {
+#if defined(INT_METHOD)
 	ADC_switchBuffer = 1;
 	while (ADC_switchBuffer);
+#else
+	switchBuffer();
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -442,8 +453,115 @@ void setup() {
     //
 }
 
+void noDmaMethod() {
+	// Speed: 232 KSPS
+	volatile uint8_t *pDR = (volatile uint8_t *)&SPI2->DR;
+
+	uint8_t *start = (uint8_t *)(ADC_samples + 0);
+	uint8_t *end = (uint8_t *)(ADC_samples + 500);
+
+	uint8_t *p = start;
+	uint8_t a, b;
+
+	while (!transferCompleted) {
+		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+		*pDR = 0xC0; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
+
+		*p++ = b;
+		*p++ = a;
+
+		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+		*pDR = 0xC4; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
+
+		*p++ = b;
+		*p++ = a;
+
+		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+		*pDR = 0xC8; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
+
+		*p++ = b;
+		*p++ = a;
+
+		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+		*pDR = 0xCC; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
+		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
+
+		*p++ = b;
+		*p++ = a;
+
+		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+
+		if (p == end) {
+			p = start;
+		}
+	}
+
+	*ADC_numSamples = (uint16_t *)p - ADC_samples;
+}
+
+void dmaMethod() {
+	// Speed: ??? KSPS
+
+	uint8_t *start = (uint8_t *)(ADC_samples + 0);
+	uint8_t *end = (uint8_t *)(ADC_samples + 500);
+
+	uint8_t *p = start;
+
+	adcIn[0] = 0xC0;
+
+	while (!transferCompleted) {
+		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+		// Enable Rx DMA Request
+		// Enable Tx DMA Request
+		*ADC_DMA_RX_CR |= DMA_SxCR_EN;
+		*ADC_DMA_TX_CR |= DMA_SxCR_EN;
+		*ADC_SPI_CR2 |= SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
+
+		while (SPI2->SR & SPI_SR_BSY);
+
+		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+
+		if (p < end) {
+			*p++ = adcOut[3];
+			*p++ = adcOut[2];
+		}
+	}
+
+	*ADC_numSamples = (uint16_t *)p - ADC_samples;
+}
+
 void loop() {
+#if defined(NO_DMA_METHOD)
+	noDmaMethod();
+#endif
+
+#if defined(DMA_METHOD)
+	dmaMethod();
+#endif
+
+#if defined(INT_METHOD)
 	while (!transferCompleted);
+#endif
+
     transferCompleted = 0;
     HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 
