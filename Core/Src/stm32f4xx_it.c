@@ -210,8 +210,8 @@ void DMA1_Stream3_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream3_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream3_IRQn 1 */
-	HAL_DMA_IRQHandler(&hdma_spi2_rx);
-	//ADC_SpiRxCallback();
+	// HAL_DMA_IRQHandler(&hdma_spi2_rx);
+	ADC_SpiRxCallback();
   /* USER CODE END DMA1_Stream3_IRQn 1 */
 }
 
@@ -224,8 +224,8 @@ void DMA1_Stream4_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
-	  HAL_DMA_IRQHandler(&hdma_spi2_tx);
-	  //ADC_SpiTxCallback();
+	  // HAL_DMA_IRQHandler(&hdma_spi2_tx);
+	  ADC_SpiTxCallback();
   /* USER CODE END DMA1_Stream4_IRQn 1 */
 }
 

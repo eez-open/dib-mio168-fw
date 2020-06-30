@@ -2,8 +2,8 @@
 
 #include "main.h"
 
-// #define INT_METHOD
-#define DMA_METHOD
+#define INT_METHOD
+// #define INT2_METHOD
 // #define NO_DMA_METHOD
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -110,8 +110,8 @@ void updateOutputPinStates(uint8_t newOutputPinStates) {
 ////////////////////////////////////////////////////////////////////////////////
 // ADC8674
 
-volatile uint8_t adcIn[4] = { 0x00, 0x00, 0x00, 0x00 };
-volatile uint8_t adcOut[4] = { 0x00, 0x00, 0x00, 0x00 };
+uint16_t adcIn[] = { 0xC000, 0x0000, 0xC000, 0x0000 };
+uint16_t adcOut[] = { 0x0000, 0x0000, 0x0000, 0x0000 };
 
 SPI_HandleTypeDef *ADC_hspi = &hspi2;
 
@@ -125,21 +125,21 @@ DMA_HandleTypeDef *ADC_DMA_TX;
 volatile uint32_t *ADC_DMA_RX_CR;
 volatile uint32_t *ADC_DMA_TX_CR;
 
-volatile uint32_t *ADC_DMA_RX_ISR;
-volatile uint32_t *ADC_DMA_TX_ISR;
+volatile uint32_t *ADC_DMA_RX_LISR;
+volatile uint32_t *ADC_DMA_TX_LISR;
 
-volatile uint32_t *ADC_DMA_RX_IFCR;
-volatile uint32_t *ADC_DMA_TX_IFCR;
+volatile uint32_t *ADC_DMA_RX_LIFCR;
+volatile uint32_t *ADC_DMA_TX_LIFCR;
 
-uint32_t ADC_DMA_RX_IFCR_clearTransferComplete;
-uint32_t ADC_DMA_TX_IFCR_clearTransferComplete;
+uint32_t ADC_DMA_RX_LIFCR_clearTransferComplete;
+uint32_t ADC_DMA_TX_LIFCR_clearTransferComplete;
 
-uint32_t ADC_DMA_RX_IFCR_value;
-uint32_t ADC_DMA_TX_IFCR_value;
+uint32_t ADC_DMA_RX_LIFCR_value;
+uint32_t ADC_DMA_TX_LIFCR_value;
 
 volatile int ADC_selectedBuffer;
-volatile uint16_t *ADC_samples;
-volatile uint16_t *ADC_numSamples;
+uint16_t *ADC_samples;
+uint16_t *ADC_numSamples;
 
 volatile int ADC_switchBuffer;
 
@@ -147,30 +147,26 @@ void ADC_SpiRxCallback();
 void ADC_SpiTxCallback();
 
 void ADC_DMA_Config() {
-	typedef struct
-	{
-	  __IO uint32_t ISR;   // DMA interrupt status register
-	  __IO uint32_t Reserved0;
-	  __IO uint32_t IFCR;  // DMA interrupt flag clear register
-	} DMA_Base_Registers;
-
     // RX DMA config
     {
 	    ADC_DMA_RX = ADC_hspi->hdmarx;
 	    ADC_DMA_RX_CR = &ADC_DMA_RX->Instance->CR;
-	    ADC_DMA_RX_ISR = &((DMA_Base_Registers *)ADC_DMA_RX->StreamBaseAddress)->ISR;
-	    ADC_DMA_RX_IFCR = &((DMA_Base_Registers *)ADC_DMA_RX->StreamBaseAddress)->IFCR;
-	    ADC_DMA_RX_IFCR_clearTransferComplete = DMA_FLAG_TCIF0_4 << ADC_DMA_RX->StreamIndex;
-	    ADC_DMA_RX_IFCR_value = 0x3FU << ADC_DMA_RX->StreamIndex;
+	    ADC_DMA_RX_LISR = &((DMA_TypeDef *)ADC_DMA_RX->StreamBaseAddress)->LISR;
+	    ADC_DMA_RX_LIFCR = &((DMA_TypeDef *)ADC_DMA_RX->StreamBaseAddress)->LIFCR;
+	    ADC_DMA_RX_LIFCR_clearTransferComplete = DMA_FLAG_TCIF0_4 << ADC_DMA_RX->StreamIndex;
+	    ADC_DMA_RX_LIFCR_value = 0x3FU << ADC_DMA_RX->StreamIndex;
 
 	    ADC_DMA_RX->XferCpltCallback = NULL;
 
 		// Clear DBM bit
 		ADC_DMA_RX->Instance->CR &= (uint32_t)(~DMA_SxCR_DBM);
+
 		// Configure DMA Stream data length
-		ADC_DMA_RX->Instance->NDTR = 4;
+		ADC_DMA_RX->Instance->NDTR = 2;
+
 		// Configure DMA Stream source address
 		ADC_DMA_RX->Instance->PAR = (uint32_t)&ADC_SPI_Instance->DR;
+
 		// Configure DMA Stream destination address
 		ADC_DMA_RX->Instance->M0AR = (uint32_t)adcOut;
     }
@@ -179,10 +175,10 @@ void ADC_DMA_Config() {
     {
         ADC_DMA_TX = ADC_hspi->hdmatx;
         ADC_DMA_TX_CR = &ADC_DMA_TX->Instance->CR;
-        ADC_DMA_TX_ISR = &((DMA_Base_Registers *)ADC_DMA_TX->StreamBaseAddress)->ISR;
-        ADC_DMA_TX_IFCR = &((DMA_Base_Registers *)ADC_DMA_TX->StreamBaseAddress)->IFCR;
-        ADC_DMA_TX_IFCR_clearTransferComplete = DMA_FLAG_TCIF0_4 << ADC_DMA_TX->StreamIndex;
-        ADC_DMA_TX_IFCR_value = 0x3FU << ADC_DMA_TX->StreamIndex;
+        ADC_DMA_TX_LISR = &((DMA_TypeDef *)ADC_DMA_TX->StreamBaseAddress)->LISR;
+        ADC_DMA_TX_LIFCR = &((DMA_TypeDef *)ADC_DMA_TX->StreamBaseAddress)->LIFCR;
+        ADC_DMA_TX_LIFCR_clearTransferComplete = DMA_FLAG_TCIF0_4 << ADC_DMA_TX->StreamIndex;
+        ADC_DMA_TX_LIFCR_value = 0x3FU << ADC_DMA_TX->StreamIndex;
 
         ADC_DMA_TX->XferCpltCallback = ADC_SpiTxCallback;
 
@@ -190,7 +186,7 @@ void ADC_DMA_Config() {
     	ADC_DMA_TX->Instance->CR &= (uint32_t)(~DMA_SxCR_DBM);
 
     	// Configure DMA Stream data length
-    	ADC_DMA_TX->Instance->NDTR = 4;
+    	ADC_DMA_TX->Instance->NDTR = 2;
 
     	// Configure DMA Stream destination address
     	ADC_DMA_TX->Instance->PAR = (uint32_t)&ADC_SPI_Instance->DR;
@@ -204,7 +200,7 @@ __STATIC_FORCEINLINE void ADC_Transfer() {
     // DMA RX
     {
 		// Clear all interrupt flags at correct offset within the register
-		*ADC_DMA_RX_IFCR = ADC_DMA_RX_IFCR_value;
+		*ADC_DMA_RX_LIFCR = ADC_DMA_RX_LIFCR_value;
 
 	    // Enable Common interrupts and Peripheral
 		*ADC_DMA_RX_CR |= DMA_IT_TC | DMA_IT_TE | DMA_IT_DME | DMA_SxCR_EN;
@@ -213,7 +209,7 @@ __STATIC_FORCEINLINE void ADC_Transfer() {
     // DMA TX
 	{
 		// Clear all interrupt flags at correct offset within the register
-		*ADC_DMA_TX_IFCR = ADC_DMA_TX_IFCR_value;
+		*ADC_DMA_TX_LIFCR = ADC_DMA_TX_LIFCR_value;
 
 	    // Enable Common interrupts and Peripheral
 		*ADC_DMA_TX_CR |= DMA_IT_TC | DMA_IT_TE | DMA_IT_DME | DMA_SxCR_EN;
@@ -240,45 +236,32 @@ __STATIC_FORCEINLINE void switchBuffer() {
 
 
 void ADC_SpiRxCallback() {
-//	/* Clear the transfer complete flag */
-//	*ADC_DMA_RX_IFCR = ADC_DMA_RX_IFCR_clearTransferComplete;
-//
-//	/* Disable the transfer complete interrupt */
-//	*ADC_DMA_RX_CR &= ~(DMA_IT_TC);
-//
-//	/* Disable ERR interrupt */
-//	*ADC_SPI_CR2 &= ~SPI_IT_ERR;
-//
-//	while (ADC_SPI_Instance->SR & SPI_FLAG_BSY);
-//
-//	/* Disable Rx/Tx DMA Request */
-//	*ADC_SPI_CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
-}
-
-
-void ADC_SpiTxCallback() {
-//	/* Clear the transfer complete flag */
-//	*ADC_DMA_TX_IFCR = ADC_DMA_TX_IFCR_clearTransferComplete;
-//
-//	/* Disable the transfer complete interrupt */
-//	*ADC_DMA_TX_CR &= ~(DMA_IT_TC);
+	// Clear the transfer complete flag
+	*ADC_DMA_RX_LIFCR = ADC_DMA_RX_LIFCR_clearTransferComplete;
 
 	if (ADC_switchBuffer) {
 		switchBuffer();
 		ADC_switchBuffer = 0;
 	}
 
-	uint16_t n = *ADC_numSamples;
-	if (n < 500) {
-		ADC_samples[n] = (adcOut[2] << 8) | adcOut[3];
-	}
-	*ADC_numSamples = n + 1;
-
 	// SET ADC CS
 	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin;
 
-	adcIn[0] = 0xC0 + ((adcIn[0] + 4) & 0x0F);
-    ADC_Transfer();
+	uint16_t n = *ADC_numSamples;
+	if (n < 500) {
+		ADC_samples[n] = adcOut[1];
+	}
+	*ADC_numSamples = n + 1;
+
+	adcIn[0] = 0xC000 | ((adcIn[0] + 0x0400) & 0x0F00);
+
+	ADC_Transfer();
+}
+
+
+void ADC_SpiTxCallback() {
+	// Clear the transfer complete flag */
+	*ADC_DMA_TX_LIFCR = ADC_DMA_TX_LIFCR_clearTransferComplete;
 }
 
 void ADC_Setup() {
@@ -286,6 +269,16 @@ void ADC_Setup() {
     HAL_GPIO_WritePin(VOLT_SW1_GPIO_Port, VOLT_SW1_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(VOLT_SW2_GPIO_Port, VOLT_SW2_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(VOLT_SW3_GPIO_Port, VOLT_SW3_Pin, GPIO_PIN_SET);
+
+#if defined(INT2_METHOD)
+
+    switchBuffer();
+
+    adcIn[0] = 0xC400;
+
+    HAL_SPI_TransmitReceive_DMA(&hspi4, adcIn, adcOut, 8);
+
+#else
 
     // ADC SPI config
     ADC_SPI_Instance = ADC_hspi->Instance;
@@ -299,15 +292,17 @@ void ADC_Setup() {
 
     switchBuffer();
 
-    adcIn[0] = 0xC4;
+    adcIn[0] = 0xC400;
 
 #if defined(INT_METHOD)
     ADC_Transfer();
 #endif
+
+#endif
 }
 
 void ADC_Loop() {
-#if defined(INT_METHOD)
+#if defined(INT_METHOD) || defined(INT2_METHOD)
 	ADC_switchBuffer = 1;
 	while (ADC_switchBuffer);
 #else
@@ -421,11 +416,59 @@ void beginTransfer() {
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
+#if defined(INT2_METHOD)
+	if (hspi == &hspi4) {
+		transferCompleted = 1;
+		return;
+	}
+
+	// RESET ADC CS
+	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U;
+
+	if (ADC_switchBuffer) {
+		switchBuffer();
+		ADC_switchBuffer = 0;
+	}
+
+	uint16_t n = *ADC_numSamples;
+	if (n < 500) {
+		ADC_samples[n] = adcOut[3];
+	}
+	*ADC_numSamples = n + 1;
+
+	// SET ADC CS
+	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+#else
 	transferCompleted = 1;
+#endif
+}
+
+void HAL_SPI_TxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
+#if defined(INT2_METHOD)
+	// RESET ADC CS
+	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U;
+
+	if (ADC_switchBuffer) {
+		switchBuffer();
+		ADC_switchBuffer = 0;
+	}
+
+	uint16_t n = *ADC_numSamples;
+	if (n < 500) {
+		ADC_samples[n] = adcOut[1];
+	}
+	*ADC_numSamples = n + 1;
+
+	// SET ADC CS
+	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+#endif
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
+#if defined(INT2_METHOD)
+#else
 	transferCompleted = 1;
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -454,58 +497,37 @@ void setup() {
 }
 
 void noDmaMethod() {
-	// Speed: 232 KSPS
-	volatile uint8_t *pDR = (volatile uint8_t *)&SPI2->DR;
+	// Speed: 292 KSPS on 180 Mhz
+	volatile uint16_t *pDR = (volatile uint16_t *)&SPI2->DR;
 
-	uint8_t *start = (uint8_t *)(ADC_samples + 0);
-	uint8_t *end = (uint8_t *)(ADC_samples + 500);
+	uint16_t *start = ADC_samples + 0;
+	uint16_t *end = ADC_samples + 500;
 
-	uint8_t *p = start;
-	uint8_t a, b;
+	uint16_t *p = start;
 
 	while (!transferCompleted) {
 		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
 
-		*pDR = 0xC0; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
-
-		*p++ = b;
-		*p++ = a;
+		*pDR = 0xC000; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x0000; while (!(SPI2->SR & SPI_SR_RXNE)); *p++ = *pDR;
 
 		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
 
-		*pDR = 0xC4; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
-
-		*p++ = b;
-		*p++ = a;
+		*pDR = 0xC400; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x0000; while (!(SPI2->SR & SPI_SR_RXNE)); *p++ = *pDR;
 
 		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
 
-		*pDR = 0xC8; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
-
-		*p++ = b;
-		*p++ = a;
+		*pDR = 0xC800; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x0000; while (!(SPI2->SR & SPI_SR_RXNE)); *p++ = *pDR;
 
 		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
 
-		*pDR = 0xCC; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); a = *pDR;
-		*pDR = 0x00; while (!(SPI2->SR & SPI_SR_RXNE)); b = *pDR;
-
-		*p++ = b;
-		*p++ = a;
+		*pDR = 0xCC00; while (!(SPI2->SR & SPI_SR_RXNE)); *pDR;
+		*pDR = 0x0000; while (!(SPI2->SR & SPI_SR_RXNE)); *p++ = *pDR;
 
 		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 
@@ -514,39 +536,7 @@ void noDmaMethod() {
 		}
 	}
 
-	*ADC_numSamples = (uint16_t *)p - ADC_samples;
-}
-
-void dmaMethod() {
-	// Speed: ??? KSPS
-
-	uint8_t *start = (uint8_t *)(ADC_samples + 0);
-	uint8_t *end = (uint8_t *)(ADC_samples + 500);
-
-	uint8_t *p = start;
-
-	adcIn[0] = 0xC0;
-
-	while (!transferCompleted) {
-		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-
-		// Enable Rx DMA Request
-		// Enable Tx DMA Request
-		*ADC_DMA_RX_CR |= DMA_SxCR_EN;
-		*ADC_DMA_TX_CR |= DMA_SxCR_EN;
-		*ADC_SPI_CR2 |= SPI_CR2_RXDMAEN | SPI_CR2_TXDMAEN;
-
-		while (SPI2->SR & SPI_SR_BSY);
-
-		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
-
-		if (p < end) {
-			*p++ = adcOut[3];
-			*p++ = adcOut[2];
-		}
-	}
-
-	*ADC_numSamples = (uint16_t *)p - ADC_samples;
+	*ADC_numSamples = p - ADC_samples;
 }
 
 void loop() {
@@ -554,11 +544,7 @@ void loop() {
 	noDmaMethod();
 #endif
 
-#if defined(DMA_METHOD)
-	dmaMethod();
-#endif
-
-#if defined(INT_METHOD)
+#if defined(INT_METHOD) || defined(INT2_METHOD)
 	while (!transferCompleted);
 #endif
 
