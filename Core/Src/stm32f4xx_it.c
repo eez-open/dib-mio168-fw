@@ -210,8 +210,16 @@ void DMA1_Stream3_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream3_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream3_IRQn 1 */
-	// HAL_DMA_IRQHandler(&hdma_spi2_rx);
+
+#if defined(INT_METHOD)
 	ADC_SpiRxCallback();
+#else
+	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+	HAL_DMA_IRQHandler(&hdma_spi2_rx);
+#endif
+
   /* USER CODE END DMA1_Stream3_IRQn 1 */
 }
 
@@ -224,8 +232,16 @@ void DMA1_Stream4_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
-	  // HAL_DMA_IRQHandler(&hdma_spi2_tx);
-	  ADC_SpiTxCallback();
+
+#if defined(INT_METHOD)
+	ADC_SpiTxCallback();
+#else
+	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+	HAL_DMA_IRQHandler(&hdma_spi2_tx);
+#endif
+
   /* USER CODE END DMA1_Stream4_IRQn 1 */
 }
 

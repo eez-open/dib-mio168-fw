@@ -48,6 +48,10 @@ extern "C" {
 /* Exported macro ------------------------------------------------------------*/
 /* USER CODE BEGIN EM */
 
+#define INT_METHOD
+// #define INT2_METHOD
+// #define NO_DMA_METHOD
+
 /* USER CODE END EM */
 
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);

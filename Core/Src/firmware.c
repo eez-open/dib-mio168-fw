@@ -2,10 +2,6 @@
 
 #include "main.h"
 
-#define INT_METHOD
-// #define INT2_METHOD
-// #define NO_DMA_METHOD
-
 ////////////////////////////////////////////////////////////////////////////////
 
 extern SPI_HandleTypeDef hspi1;
@@ -235,6 +231,19 @@ __STATIC_FORCEINLINE void switchBuffer() {
 }
 
 
+__STATIC_FORCEINLINE void ADC_onNewSample(uint16_t sample) {
+	if (ADC_switchBuffer) {
+		switchBuffer();
+		ADC_switchBuffer = 0;
+	}
+
+	uint16_t n = *ADC_numSamples;
+	if (n < 500) {
+		ADC_samples[n] = sample;
+	}
+	*ADC_numSamples = n + 1;
+}
+
 void ADC_SpiRxCallback() {
 	// Clear the transfer complete flag
 	*ADC_DMA_RX_LIFCR = ADC_DMA_RX_LIFCR_clearTransferComplete;
@@ -274,11 +283,18 @@ void ADC_Setup() {
 
     switchBuffer();
 
-    adcIn[0] = 0xC400;
+    adcIn[0] = 0xC000;
+	adcIn[2] = 0xC000;
 
-    HAL_SPI_TransmitReceive_DMA(&hspi4, adcIn, adcOut, 8);
+	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+
+	HAL_SPI_TransmitReceive_DMA(ADC_hspi, (uint8_t *)adcIn, (uint8_t *)adcOut, 4);
 
 #else
+	ADC_hspi->hdmarx->Init.Mode = DMA_NORMAL;
+	HAL_DMA_Init(ADC_hspi->hdmarx);
+	ADC_hspi->hdmatx->Init.Mode = DMA_NORMAL;
+	HAL_DMA_Init(ADC_hspi->hdmatx);
 
     // ADC SPI config
     ADC_SPI_Instance = ADC_hspi->Instance;
@@ -344,7 +360,7 @@ void DAC1_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
     HAL_SPI_Transmit(&hspi1, buf, 3, 100);
     HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_RESET);
-  }
+}
 
 void DAC1_Setup() {
 	// Control register: OUTEN=1, RANGE=001
@@ -415,57 +431,32 @@ void beginTransfer() {
     HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
 }
 
+void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
+#if defined(INT2_METHOD)
+	if (hspi == ADC_hspi) {
+		ADC_onNewSample(adcOut[1]);
+	}
+#endif
+}
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 #if defined(INT2_METHOD)
-	if (hspi == &hspi4) {
+	if (hspi == ADC_hspi) {
+		ADC_onNewSample(adcOut[3]);
+	} else {
 		transferCompleted = 1;
-		return;
 	}
-
-	// RESET ADC CS
-	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U;
-
-	if (ADC_switchBuffer) {
-		switchBuffer();
-		ADC_switchBuffer = 0;
-	}
-
-	uint16_t n = *ADC_numSamples;
-	if (n < 500) {
-		ADC_samples[n] = adcOut[3];
-	}
-	*ADC_numSamples = n + 1;
-
-	// SET ADC CS
-	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 #else
 	transferCompleted = 1;
 #endif
 }
 
-void HAL_SPI_TxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
-#if defined(INT2_METHOD)
-	// RESET ADC CS
-	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U;
-
-	if (ADC_switchBuffer) {
-		switchBuffer();
-		ADC_switchBuffer = 0;
-	}
-
-	uint16_t n = *ADC_numSamples;
-	if (n < 500) {
-		ADC_samples[n] = adcOut[1];
-	}
-	*ADC_numSamples = n + 1;
-
-	// SET ADC CS
-	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
-#endif
-}
-
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 #if defined(INT2_METHOD)
+	if (hspi == ADC_hspi) {
+	} else {
+		transferCompleted = 1;
+	}
 #else
 	transferCompleted = 1;
 #endif
