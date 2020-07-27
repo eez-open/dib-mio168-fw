@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -75,6 +76,32 @@ static void MX_TIM2_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
 
+static void testSdCard() {
+//	if (FATFS_LinkDriver(&SD_Driver, SDPath) != 0) {
+//		return;
+//	}
+
+	if (f_mount(&SDFatFS, (TCHAR const*)SDPath, 1) != FR_OK) {
+		/* FatFs Initialization Error */
+		return;
+	}
+
+	if (f_open(&SDFile, "STMTXT", FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+		return;
+	}
+
+	const char *wtext = "Hello, world!\n";
+	UINT byteswritten;
+
+	FRESULT res = f_write(&SDFile, wtext, sizeof(wtext), (void *)&byteswritten);
+
+	if ((byteswritten == 0) || (res != FR_OK)) {
+		return;
+	}
+
+	f_close(&SDFile);
+}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -120,7 +147,11 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_SPI2_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+
+  testSdCard();
+
   setup();
   /* USER CODE END 2 */
 
@@ -242,14 +273,6 @@ static void MX_SDIO_SD_Init(void)
   hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
   hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
   hsd.Init.ClockDiv = 0;
-  if (HAL_SD_Init(&hsd) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_SD_ConfigWideBusOperation(&hsd, SDIO_BUS_WIDE_4B) != HAL_OK)
-  {
-    Error_Handler();
-  }
   /* USER CODE BEGIN SDIO_Init 2 */
 
   /* USER CODE END SDIO_Init 2 */
