@@ -47,23 +47,10 @@ void slaveSynchro(void) {
     };
 
     uint8_t rxBuffer[15];
-
-    while (1) {
-		rxBuffer[0] = 0;
-
-        if (HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer)) != HAL_OK) {
-        	transferCompleted = 0;
-        	continue;
-        }
-
-    	while (!transferCompleted);
-        transferCompleted = 0;
-
-		if (rxBuffer[0] == SPI_MASTER_SYNBYTE) {
-			break;
-		}
-	};
-
+    HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+    while (!transferCompleted) {
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -429,6 +416,7 @@ void beginTransfer() {
     output[1] = outputPinStates;
 
     HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 }
 
 void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
@@ -445,9 +433,11 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 		ADC_onNewSample(adcOut[3]);
 	} else {
 		transferCompleted = 1;
+	    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 	}
 #else
 	transferCompleted = 1;
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 #endif
 }
 
@@ -456,9 +446,11 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == ADC_hspi) {
 	} else {
 		transferCompleted = 1;
+	    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 	}
 #else
 	transferCompleted = 1;
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 #endif
 }
 
@@ -472,7 +464,6 @@ void setup() {
 	input = &inputBuffers[0][0];
 
     beginTransfer();
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 
     ADC_selectedBuffer = 1;
 	output = &outputBuffers[1][0];
@@ -540,7 +531,6 @@ void loop() {
 #endif
 
     transferCompleted = 0;
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 
     //
 
@@ -557,6 +547,5 @@ void loop() {
 	//
 
 	beginTransfer();
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 }
 
