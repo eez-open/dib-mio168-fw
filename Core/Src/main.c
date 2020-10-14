@@ -104,6 +104,10 @@ static void testSdCard() {
 	f_close(&SDFile);
 }
 
+void TIM4_Init(void) {
+	MX_TIM4_Init();
+}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -179,11 +183,11 @@ void SystemClock_Config(void)
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
 
-  /** Configure the main internal regulator output voltage 
+  /** Configure the main internal regulator output voltage
   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the CPU, AHB and APB busses clocks
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -199,13 +203,13 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  /** Activate the Over-Drive mode 
+  /** Activate the Over-Drive mode
   */
   if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the CPU, AHB and APB busses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
@@ -539,9 +543,9 @@ static void MX_TIM4_Init(void)
 
   /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 1000;
+  htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 1000;
+  htim4.Init.Period = 0;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
@@ -555,7 +559,7 @@ static void MX_TIM4_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 500;
+  sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
@@ -574,10 +578,10 @@ static void MX_TIM4_Init(void)
 
 }
 
-/** 
+/**
   * Enable DMA controller clock
   */
-static void MX_DMA_Init(void) 
+static void MX_DMA_Init(void)
 {
 
   /* DMA controller clock enable */
@@ -626,27 +630,27 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, TEMP_SW_1_Pin|TEMP_SW_2_Pin|DAC_CS_1_Pin|DOUT4_Pin 
+  HAL_GPIO_WritePin(GPIOC, TEMP_SW_1_Pin|TEMP_SW_2_Pin|DAC_CS_1_Pin|DOUT4_Pin
                           |DOUT5_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, VOLT_SW0_Pin|VOLT_SW1_Pin|VOLT_SW2_Pin|VOLT_SW3_Pin 
-                          |DAC_CS_2_Pin|DAC_CLR_2_Pin|DAC_CLR_SEL_2_Pin|DAC_CLR_1_Pin 
+  HAL_GPIO_WritePin(GPIOF, VOLT_SW0_Pin|VOLT_SW1_Pin|VOLT_SW2_Pin|VOLT_SW3_Pin
+                          |DAC_CS_2_Pin|DAC_CLR_2_Pin|DAC_CLR_SEL_2_Pin|DAC_CLR_1_Pin
                           |DAC_CLR_SEL_1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|DIB_IRQ_Pin|OUT_EN_Pin 
+  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|DIB_IRQ_Pin|OUT_EN_Pin
                           |ADC_CS_Pin|IN_CTRL7_Pin|SLOW_DIN_0_Pin|SLOW_DIN_1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, ADC_IRQ_Pin|CURR_SW0_Pin|CURR_SW1_Pin|CURR_SW2_Pin 
+  HAL_GPIO_WritePin(GPIOD, ADC_IRQ_Pin|CURR_SW0_Pin|CURR_SW1_Pin|CURR_SW2_Pin
                           |CURR_SW3_Pin|IN_CTRL0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOG, DOUT2_Pin|DOUT3_Pin|IN_CTRL1_Pin|IN_CTRL2_Pin 
+  HAL_GPIO_WritePin(GPIOG, DOUT2_Pin|DOUT3_Pin|IN_CTRL1_Pin|IN_CTRL2_Pin
                           |IN_CTRL3_Pin|IN_CTRL4_Pin|IN_CTRL5_Pin|IN_CTRL6_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : TEMP_SW_1_Pin TEMP_SW_2_Pin DOUT4_Pin DOUT5_Pin */
@@ -662,9 +666,9 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : VOLT_SW0_Pin VOLT_SW1_Pin VOLT_SW2_Pin VOLT_SW3_Pin 
+  /*Configure GPIO pins : VOLT_SW0_Pin VOLT_SW1_Pin VOLT_SW2_Pin VOLT_SW3_Pin
                            DAC_CLR_2_Pin DAC_CLR_SEL_2_Pin DAC_CLR_1_Pin DAC_CLR_SEL_1_Pin */
-  GPIO_InitStruct.Pin = VOLT_SW0_Pin|VOLT_SW1_Pin|VOLT_SW2_Pin|VOLT_SW3_Pin 
+  GPIO_InitStruct.Pin = VOLT_SW0_Pin|VOLT_SW1_Pin|VOLT_SW2_Pin|VOLT_SW3_Pin
                           |DAC_CLR_2_Pin|DAC_CLR_SEL_2_Pin|DAC_CLR_1_Pin|DAC_CLR_SEL_1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -692,18 +696,18 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(DAC_CS_DUAL_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : DOUT6_Pin DOUT7_Pin DIB_IRQ_Pin OUT_EN_Pin 
+  /*Configure GPIO pins : DOUT6_Pin DOUT7_Pin DIB_IRQ_Pin OUT_EN_Pin
                            ADC_CS_Pin IN_CTRL7_Pin SLOW_DIN_0_Pin SLOW_DIN_1_Pin */
-  GPIO_InitStruct.Pin = DOUT6_Pin|DOUT7_Pin|DIB_IRQ_Pin|OUT_EN_Pin 
+  GPIO_InitStruct.Pin = DOUT6_Pin|DOUT7_Pin|DIB_IRQ_Pin|OUT_EN_Pin
                           |ADC_CS_Pin|IN_CTRL7_Pin|SLOW_DIN_0_Pin|SLOW_DIN_1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : ADC_IRQ_Pin CURR_SW0_Pin CURR_SW1_Pin CURR_SW2_Pin 
+  /*Configure GPIO pins : ADC_IRQ_Pin CURR_SW0_Pin CURR_SW1_Pin CURR_SW2_Pin
                            CURR_SW3_Pin IN_CTRL0_Pin */
-  GPIO_InitStruct.Pin = ADC_IRQ_Pin|CURR_SW0_Pin|CURR_SW1_Pin|CURR_SW2_Pin 
+  GPIO_InitStruct.Pin = ADC_IRQ_Pin|CURR_SW0_Pin|CURR_SW1_Pin|CURR_SW2_Pin
                           |CURR_SW3_Pin|IN_CTRL0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -722,9 +726,9 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(OUT_FAULT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : DOUT2_Pin DOUT3_Pin IN_CTRL1_Pin IN_CTRL2_Pin 
+  /*Configure GPIO pins : DOUT2_Pin DOUT3_Pin IN_CTRL1_Pin IN_CTRL2_Pin
                            IN_CTRL3_Pin IN_CTRL4_Pin IN_CTRL5_Pin IN_CTRL6_Pin */
-  GPIO_InitStruct.Pin = DOUT2_Pin|DOUT3_Pin|IN_CTRL1_Pin|IN_CTRL2_Pin 
+  GPIO_InitStruct.Pin = DOUT2_Pin|DOUT3_Pin|IN_CTRL1_Pin|IN_CTRL2_Pin
                           |IN_CTRL3_Pin|IN_CTRL4_Pin|IN_CTRL5_Pin|IN_CTRL6_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -770,7 +774,7 @@ void Error_Handler(void)
   * @retval None
   */
 void assert_failed(uint8_t *file, uint32_t line)
-{ 
+{
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
      tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */

@@ -69,7 +69,7 @@ extern DMA_HandleTypeDef hdma_spi4_tx;
 /* USER CODE END EV */
 
 /******************************************************************************/
-/*           Cortex-M4 Processor Interruption and Exception Handlers          */ 
+/*           Cortex-M4 Processor Interruption and Exception Handlers          */
 /******************************************************************************/
 /**
   * @brief This function handles Non maskable interrupt.
@@ -236,13 +236,16 @@ void DMA1_Stream4_IRQHandler(void)
   /* USER CODE END DMA1_Stream4_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
 
-#if defined(INT_METHOD)
-	ADC_SpiTxCallback();
+#if defined(SIMPLE_METHOD)
 #else
-	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
-	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
+  #if defined(INT_METHOD)
+    ADC_SpiTxCallback();
+  #else
+    ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
+    ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
 
-	HAL_DMA_IRQHandler(&hdma_spi2_tx);
+    HAL_DMA_IRQHandler(&hdma_spi2_tx);
+  #endif
 #endif
 
   /* USER CODE END DMA1_Stream4_IRQn 1 */
