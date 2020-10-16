@@ -24,6 +24,12 @@ uint8_t *input;
 
 volatile int transferCompleted;
 
+enum SourceMode {
+	SOURCE_MODE_CURRENT,
+	SOURCE_MODE_VOLTAGE,
+	SOURCE_MODE_OPEN
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 
 typedef struct {
@@ -119,6 +125,49 @@ void slaveSynchro(void) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+GPIO_TypeDef* dinRangePorts[8] = {
+	IN_CTRL0_GPIO_Port, IN_CTRL1_GPIO_Port, IN_CTRL2_GPIO_Port, IN_CTRL3_GPIO_Port,
+	IN_CTRL4_GPIO_Port, IN_CTRL5_GPIO_Port, IN_CTRL6_GPIO_Port, IN_CTRL7_GPIO_Port
+};
+
+uint16_t dinRangePins[8] = {
+	IN_CTRL0_Pin, IN_CTRL1_Pin, IN_CTRL2_Pin, IN_CTRL3_Pin,
+	IN_CTRL4_Pin,IN_CTRL5_Pin, IN_CTRL6_Pin, IN_CTRL7_Pin
+};
+
+GPIO_TypeDef* dinSpeedPorts[2] = {
+	SLOW_DIN_0_GPIO_Port, SLOW_DIN_1_GPIO_Port
+};
+uint16_t dinSpeedPins[2] = {
+	SLOW_DIN_0_Pin, SLOW_DIN_1_Pin
+};
+
+void Din_Setup() {
+	for (int i = 0; i < 8; i++) {
+		HAL_GPIO_WritePin(dinRangePorts[i], dinRangePins[i], GPIO_PIN_RESET);
+	}
+
+	for (int i = 0; i < 2; i++) {
+		HAL_GPIO_WritePin(dinSpeedPorts[i], dinSpeedPins[i], GPIO_PIN_RESET);
+	}
+}
+
+void Din_Loop(FromMasterToSlave *newState) {
+	for (int i = 0; i < 8; i++) {
+		int newRange = newState->dinRanges & (1 << i);
+		if (newRange != (currentState.dinRanges & (1 << i))) {
+			HAL_GPIO_WritePin(dinRangePorts[i], dinRangePins[i], newRange ? GPIO_PIN_SET : GPIO_PIN_RESET);
+		}
+	}
+
+	for (int i = 0; i < 2; i++) {
+		int newSpeed = newState->dinSpeeds & (1 << i);
+		if (newSpeed != (currentState.dinSpeeds & (1 << i))) {
+			HAL_GPIO_WritePin(dinSpeedPorts[i], dinSpeedPins[i], newSpeed ? GPIO_PIN_SET : GPIO_PIN_RESET);
+		}
+	}
+}
 
 uint8_t readDataInputs() {
 	return
@@ -391,8 +440,8 @@ void ADC_Loop(FromMasterToSlave *newState) {
 
 	for (int i = 0; i < 4; i++) {
 		if (newState->ain[i].mode != currentState.ain[i].mode) {
-			HAL_GPIO_WritePin(voltSwPorts[i], voltSwPins[i], newState->ain[i].mode ? GPIO_PIN_SET : GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(currSwPorts[i], currSwPins[i], newState->ain[i].mode ? GPIO_PIN_RESET : GPIO_PIN_SET);
+			HAL_GPIO_WritePin(voltSwPorts[i], voltSwPins[i], newState->ain[i].mode == SOURCE_MODE_VOLTAGE ? GPIO_PIN_SET : GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(currSwPorts[i], currSwPins[i], newState->ain[i].mode == SOURCE_MODE_CURRENT ? GPIO_PIN_SET : GPIO_PIN_RESET);
 		}
 
 		if (newState->ain[i].range != currentState.ain[i].range) {
@@ -562,8 +611,6 @@ void DACDual_Loop(int i, FromMasterToSlave *newState) {
 			dacValue = (uint16_t)roundf(65535.0f * (newVoltage - min) / (max - min));
 		}
 
-		DAC_SpiWrite(i, DAC7760_DATA_REGISTER, dacValue >> 8, dacValue & 0xFF);
-
 		if (i == 0) {
 			DACDual_SpiWrite(0b00011000, dacValue >> 8, dacValue & 0xFF);
 		} else {
@@ -625,7 +672,9 @@ void PWM_Loop(int i, FromMasterToSlave *newState) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void beginTransfer() {
-    output[0] = readDataInputs();
+	FromSlaveToMaster *slaveToMaster = (FromSlaveToMaster *)output;
+
+	slaveToMaster->dinStates = readDataInputs();
 
     HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
     HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
@@ -692,6 +741,8 @@ void setup() {
 	input = &inputBuffers[1][0];
 
     //
+	Din_Setup();
+
 	ADC_Setup();
 
 	DAC_Setup(0);
@@ -765,6 +816,8 @@ void loop() {
     }
 
     //
+
+    Din_Loop(newState);
 
 	ADC_Loop(newState);
 
