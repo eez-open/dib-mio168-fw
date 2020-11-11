@@ -121,19 +121,18 @@ void slaveSynchro(void) {
     uint8_t rxBuffer[15];
 
 	while (1) {
-		HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
-		HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
-		while (!transferCompleted) {
+		transferCompleted = 0;
+		HAL_StatusTypeDef result = HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
+		if (result == HAL_OK) {
+			HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
+			while (!transferCompleted) {
+			}
+			if (transferCompleted == 1) {
+				break;
+			}
 		}
-
-
-		if (transferCompleted == 1) {
-			break;
-		}
-
-		HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 		HAL_Delay(1);
-	}
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
