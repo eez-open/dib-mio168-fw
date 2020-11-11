@@ -642,8 +642,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|DIB_IRQ_Pin|OUT_EN_Pin
-                          |ADC_CS_Pin|IN_CTRL7_Pin|SLOW_DIN_0_Pin|SLOW_DIN_1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|OUT_EN_Pin|ADC_CS_Pin
+                          |IN_CTRL7_Pin|SLOW_DIN_0_Pin|SLOW_DIN_1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, ADC_IRQ_Pin|CURR_SW0_Pin|CURR_SW1_Pin|CURR_SW2_Pin

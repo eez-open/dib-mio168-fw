@@ -62,6 +62,7 @@ typedef struct {
 
 typedef struct {
     uint8_t dinStates;
+    uint16_t ainValues[4];
 } FromSlaveToMaster;
 
 FromMasterToSlave currentState;
@@ -118,10 +119,21 @@ void slaveSynchro(void) {
     };
 
     uint8_t rxBuffer[15];
-    HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
-    while (!transferCompleted) {
-    }
+
+	while (1) {
+		HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
+		HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
+		while (!transferCompleted) {
+		}
+
+
+		if (transferCompleted == 1) {
+			break;
+		}
+
+		HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
+		HAL_Delay(1);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -676,8 +688,16 @@ void beginTransfer() {
 
 	slaveToMaster->dinStates = readDataInputs();
 
-    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+	uint16_t *ADC_samples = (uint16_t *)(output + 24);
+
+	slaveToMaster->ainValues[0] = ADC_samples[0];
+	slaveToMaster->ainValues[1] = ADC_samples[1];
+	slaveToMaster->ainValues[2] = ADC_samples[2];
+	slaveToMaster->ainValues[3] = ADC_samples[3];
+
+    transferCompleted = 0;
+    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, sizeof(FromMasterToSlave));
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 }
 
 void HAL_SPI_TxRxHalfCpltCallback(SPI_HandleTypeDef *hspi) {
@@ -702,8 +722,8 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 	}
 #endif
 
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 	transferCompleted = 1;
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
@@ -719,8 +739,8 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 	}
 #endif
 
-	transferCompleted = 1;
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+	transferCompleted = 2;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -803,36 +823,34 @@ void loop() {
 #endif
 
 #if defined(INT_METHOD) || defined(INT2_METHOD) || defined(SIMPLE_METHOD)
-	while (!transferCompleted);
+	while (!transferCompleted) {
+	}
 #endif
 
-    transferCompleted = 0;
+	if (transferCompleted == 1) {
+		FromMasterToSlave *newState = (FromMasterToSlave *)input;
 
-    //
-    FromMasterToSlave *newState = (FromMasterToSlave *)input;
+		if (newState->doutStates != currentState.doutStates) {
+			updateDoutStates(newState->doutStates);
+		}
 
-    if (newState->doutStates != currentState.doutStates) {
-    	updateDoutStates(newState->doutStates);
-    }
+		//
 
-    //
+		Din_Loop(newState);
 
-    Din_Loop(newState);
+		ADC_Loop(newState);
 
-	ADC_Loop(newState);
+		DAC_Loop(0, newState);
+		DAC_Loop(1, newState);
 
-    DAC_Loop(0, newState);
-	DAC_Loop(1, newState);
+		DACDual_Loop(0, newState);
+		DACDual_Loop(1, newState);
 
-	DACDual_Loop(0, newState);
-	DACDual_Loop(1, newState);
+		PWM_Loop(0, newState);
+		// PWM_Loop(1, newState);
 
-	PWM_Loop(0, newState);
-	// PWM_Loop(1, newState);
-
-    memcpy(&currentState, newState, sizeof(FromMasterToSlave));
-
-    //
+		memcpy(&currentState, newState, sizeof(FromMasterToSlave));
+	}
 
 	beginTransfer();
 }
