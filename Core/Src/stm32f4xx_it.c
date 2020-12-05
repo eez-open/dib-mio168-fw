@@ -47,8 +47,6 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-void ADC_SpiRxCallback();
-void ADC_SpiTxCallback();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -64,6 +62,7 @@ extern DMA_HandleTypeDef hdma_spi2_rx;
 extern DMA_HandleTypeDef hdma_spi2_tx;
 extern DMA_HandleTypeDef hdma_spi4_rx;
 extern DMA_HandleTypeDef hdma_spi4_tx;
+extern TIM_HandleTypeDef htim6;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -213,16 +212,6 @@ void DMA1_Stream3_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream3_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream3_IRQn 1 */
-
-#if defined(INT_METHOD)
-	ADC_SpiRxCallback();
-#else
-	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
-	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-
-	HAL_DMA_IRQHandler(&hdma_spi2_rx);
-#endif
-
   /* USER CODE END DMA1_Stream3_IRQn 1 */
 }
 
@@ -235,19 +224,6 @@ void DMA1_Stream4_IRQHandler(void)
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
-
-#if defined(SIMPLE_METHOD)
-#else
-  #if defined(INT_METHOD)
-    ADC_SpiTxCallback();
-  #else
-    ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
-    ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-
-    HAL_DMA_IRQHandler(&hdma_spi2_tx);
-  #endif
-#endif
-
   /* USER CODE END DMA1_Stream4_IRQn 1 */
 }
 
@@ -263,6 +239,20 @@ void SDIO_IRQHandler(void)
   /* USER CODE BEGIN SDIO_IRQn 1 */
 
   /* USER CODE END SDIO_IRQn 1 */
+}
+
+/**
+  * @brief This function handles TIM6 global interrupt and DAC1, DAC2 underrun error interrupts.
+  */
+void TIM6_DAC_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM6_DAC_IRQn 0 */
+
+  /* USER CODE END TIM6_DAC_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim6);
+  /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
+
+  /* USER CODE END TIM6_DAC_IRQn 1 */
 }
 
 /**
