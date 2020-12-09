@@ -24,6 +24,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
 
 /* USER CODE END Includes */
 
@@ -80,31 +82,58 @@ static void MX_SPI2_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 
-static void testSdCard() {
-//	if (FATFS_LinkDriver(&SD_Driver, SDPath) != 0) {
-//		return;
-//	}
+#if 0
+char buffer[65536];
 
+static void testSdCard(uint32_t chunkSize) {
 	if (f_mount(&SDFatFS, (TCHAR const*)SDPath, 1) != FR_OK) {
 		/* FatFs Initialization Error */
 		return;
 	}
 
-	if (f_open(&SDFile, "STMTXT", FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+	char filePath[128];
+
+	sprintf(filePath, "BMRK%d.TXT", (int)chunkSize);
+
+	if (f_open(&SDFile, filePath, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
 		return;
 	}
 
-	const char *wtext = "Hello, world!\n";
+	for (int i = 0; i < chunkSize - 1; i++) {
+		buffer[i] = 32 + i % (127 - 32);
+	}
+	buffer[chunkSize - 1] = '\n';
+
+	uint32_t startTime = HAL_GetTick();
+
+	uint32_t transferred = 0;
+
+
+	int numSteps = (10 * 1024 * 1024) / chunkSize;
+
+	for (int i = 0; i < numSteps; i++) {
+		UINT byteswritten;
+		FRESULT res = f_write(&SDFile, buffer, chunkSize, (void *)&byteswritten);
+		transferred += byteswritten;
+		if ((byteswritten < chunkSize) || (res != FR_OK)) {
+			break;
+		}
+	}
+
+	uint32_t endTime = HAL_GetTick();
+
+	uint32_t diffMs = endTime - startTime;
+
+	double diffS = (endTime - startTime) / 1000.0;
+
+	sprintf(buffer, "startTime=%lu\nendTime=%lu\ndiffMs=%lu\ndiffS=%f\ntransferred=%lu\nspeed=%f\n",
+			startTime, endTime, diffMs, diffS, transferred, transferred / diffS);
 	UINT byteswritten;
-
-	FRESULT res = f_write(&SDFile, wtext, sizeof(wtext), (void *)&byteswritten);
-
-	if ((byteswritten == 0) || (res != FR_OK)) {
-		return;
-	}
+	f_write(&SDFile, buffer, strlen(buffer), (void *)&byteswritten);
 
 	f_close(&SDFile);
 }
+#endif
 
 void TIM4_Init(void) {
 	MX_TIM4_Init();
@@ -159,7 +188,17 @@ int main(void)
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
-  testSdCard();
+#if 0
+  testSdCard(512);
+  testSdCard(1024);
+  testSdCard(2048);
+  testSdCard(4096);
+  testSdCard(8192);
+  testSdCard(8192);
+  testSdCard(16384);
+  testSdCard(32768);
+  testSdCard(65536);
+#endif
 
   setup();
   /* USER CODE END 2 */
@@ -281,10 +320,10 @@ static void MX_SDIO_SD_Init(void)
   /* USER CODE END SDIO_Init 1 */
   hsd.Instance = SDIO;
   hsd.Init.ClockEdge = SDIO_CLOCK_EDGE_RISING;
-  hsd.Init.ClockBypass = SDIO_CLOCK_BYPASS_DISABLE;
+  hsd.Init.ClockBypass = SDIO_CLOCK_BYPASS_ENABLE;
   hsd.Init.ClockPowerSave = SDIO_CLOCK_POWER_SAVE_DISABLE;
   hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
-  hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
+  hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_ENABLE;
   hsd.Init.ClockDiv = 3;
   /* USER CODE BEGIN SDIO_Init 2 */
 
@@ -781,7 +820,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : SD_DETECT_Pin */
   GPIO_InitStruct.Pin = SD_DETECT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : DIN4_Pin DIN5_Pin DIN6_Pin DIN7_Pin */
