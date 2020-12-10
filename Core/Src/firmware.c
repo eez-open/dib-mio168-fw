@@ -28,6 +28,8 @@ enum SourceMode {
 };
 
 typedef struct {
+    uint8_t operation; // DISK_DRIVER_OPERATION_NONE
+
     uint8_t dinRanges;
     uint8_t dinSpeeds;
 
@@ -54,15 +56,15 @@ typedef struct {
         float duty;
     } pwm[2];
 
-	uint16_t dinReadPeriod;
+    uint16_t dinReadPeriod;
+} FromMasterToSlaveParamsChange;
 
-    struct {
-        uint8_t operation; // enum fs::DiskDriverOperation
-        uint32_t sector;
-        uint8_t cmd;
-        uint8_t buffer[512];
-    } diskDriverOperation;
-} FromMasterToSlave;
+typedef struct {
+    uint8_t operation; // enum DiskDriverOperation
+    uint32_t sector;
+    uint8_t cmd;
+    uint8_t buffer[512];
+} FromMasterToSlaveDiskDriveOperation;
 
 enum DiskDriverOperation {
     DISK_DRIVER_OPERATION_NONE,
@@ -90,9 +92,7 @@ typedef struct {
 	uint8_t buffer[512];
 } FromSlaveToMaster;
 
-FromMasterToSlave currentState;
-
-#define BUFFER_SIZE 768
+FromMasterToSlaveParamsChange currentState;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -152,7 +152,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
-void DinRead_Loop(FromMasterToSlave *newState) {
+void DinRead_Loop(FromMasterToSlaveParamsChange *newState) {
 	if (newState->dinReadPeriod != currentState.dinReadPeriod) {
 		HAL_TIM_Base_Stop_IT(&htim6);
 
@@ -214,7 +214,7 @@ void Din_Setup() {
 	dinStates = readDataInputs();
 }
 
-void Din_Loop(FromMasterToSlave *newState) {
+void Din_Loop(FromMasterToSlaveParamsChange *newState) {
 	for (int i = 0; i < 8; i++) {
 		int newRange = newState->dinRanges & (1 << i);
 		if (newRange != (currentState.dinRanges & (1 << i))) {
@@ -284,7 +284,7 @@ void ADC_Setup() {
 	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 }
 
-void ADC_Loop(FromMasterToSlave *newState) {
+void ADC_Loop(FromMasterToSlaveParamsChange *newState) {
 	const int TIMEOUT = 5;
 
 	for (int i = 0; i < 4; i++) {
@@ -349,7 +349,7 @@ void DAC_Setup(int i) {
 	DAC_SpiWrite(i, DAC7760_DATA_REGISTER, 0, 0);
 }
 
-void DAC_Loop(int i, FromMasterToSlave *newState) {
+void DAC_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 	uint8_t newOutputEnabled = newState->aout_dac7760[i].outputEnabled;
 	uint8_t newOutputRange = newState->aout_dac7760[i].outputRange;
 	if (
@@ -430,7 +430,7 @@ void DACDual_Setup() {
 	DACDual_SpiWrite(0b00000010, 0x00, 0x03);
 }
 
-void DACDual_Loop(int i, FromMasterToSlave *newState) {
+void DACDual_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 	float newVoltage = newState->aout_dac7563[i].voltage;
 	if (newVoltage != currentState.aout_dac7563[i].voltage) {
 		uint16_t dacValue;
@@ -461,7 +461,7 @@ void PWM_Setup() {
 	HAL_GPIO_WritePin(OUT_EN_GPIO_Port, OUT_EN_Pin, GPIO_PIN_SET);
 }
 
-void PWM_Loop(int i, FromMasterToSlave *newState) {
+void PWM_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 	float newFreq = newState->pwm[i].freq;
 	float newDuty = newState->pwm[i].duty;
 	if (newFreq != currentState.pwm[i].freq || newDuty != currentState.pwm[i].duty) {
@@ -585,7 +585,7 @@ void beginTransfer() {
 	}
 
     transferCompleted = 0;
-    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, BUFFER_SIZE);
+    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, sizeof(FromSlaveToMaster));
     HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 }
 
@@ -632,7 +632,14 @@ void setup() {
 }
 
 void loop() {
+	uint32_t startTick = HAL_GetTick();
 	while (!transferCompleted) {
+		if (HAL_GetTick() - startTick > 500) {
+			HAL_SPI_Abort(&hspi4);
+			HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+			transferCompleted = 2;
+			break;
+		}
 	}
 
 	FromSlaveToMaster *slaveToMaster = (FromSlaveToMaster *)output;
@@ -640,29 +647,12 @@ void loop() {
 	slaveToMaster->flags = 0;
 
 	if (transferCompleted == 1) {
-		FromMasterToSlave *newState = (FromMasterToSlave *)input;
+		FromMasterToSlaveParamsChange *newState = (FromMasterToSlaveParamsChange *)input;
 
-		if (newState->diskDriverOperation.operation != DISK_DRIVER_OPERATION_NONE) {
-			if (newState->diskDriverOperation.operation == DISK_DRIVER_OPERATION_INITIALIZE) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_initialize(0);
-			} else if (newState->diskDriverOperation.operation == DISK_DRIVER_OPERATION_STATUS) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_status(0);
-			} else if (newState->diskDriverOperation.operation == DISK_DRIVER_OPERATION_READ) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_read(0, slaveToMaster->buffer, newState->diskDriverOperation.sector, 1);
-			} else if (newState->diskDriverOperation.operation == DISK_DRIVER_OPERATION_WRITE) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_write(0, newState->diskDriverOperation.buffer, newState->diskDriverOperation.sector, 1);
-			} else if (newState->diskDriverOperation.operation == DISK_DRIVER_OPERATION_IOCTL) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_ioctl(0, newState->diskDriverOperation.cmd, newState->diskDriverOperation.buffer);
-				memcpy(slaveToMaster->buffer, newState->diskDriverOperation.buffer, DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE);
-			}
-
-			slaveToMaster->flags |= FLAG_DISK_OPERATION_RESPONSE;
-		} else {
+		if (newState->operation == DISK_DRIVER_OPERATION_NONE) {
 			if (newState->doutStates != currentState.doutStates) {
 				updateDoutStates(newState->doutStates);
 			}
-
-			//
 
 			DinRead_Loop(newState);
 
@@ -679,7 +669,24 @@ void loop() {
 			PWM_Loop(0, newState);
 			// PWM_Loop(1, newState);
 
-			memcpy(&currentState, newState, offsetof(FromMasterToSlave, diskDriverOperation));
+			memcpy(&currentState, newState, sizeof(FromMasterToSlaveParamsChange));
+		} else {
+			FromMasterToSlaveDiskDriveOperation *diskDriveOperation = (FromMasterToSlaveDiskDriveOperation *)input;
+
+			if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_INITIALIZE) {
+				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_initialize(0);
+			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_STATUS) {
+				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_status(0);
+			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_READ) {
+				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_read(0, slaveToMaster->buffer, diskDriveOperation->sector, 1);
+			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_WRITE) {
+				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_write(0, diskDriveOperation->buffer, diskDriveOperation->sector, 1);
+			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_IOCTL) {
+				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_ioctl(0, diskDriveOperation->cmd, diskDriveOperation->buffer);
+				memcpy(slaveToMaster->buffer, diskDriveOperation->buffer, DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE);
+			}
+
+			slaveToMaster->flags |= FLAG_DISK_OPERATION_RESPONSE;
 		}
 	}
 
