@@ -6,18 +6,20 @@
 #include <ff_gen_drv.h>
 #include <sd_diskio.h>
 
-////////////////////////////////////////////////////////////////////////////////
-
-extern SPI_HandleTypeDef hspi1; // for DAC7760 and DAC7563
-extern SPI_HandleTypeDef hspi2; // for ADC8674
-extern SPI_HandleTypeDef hspi4; // for MASTER-SLAVE communication
-extern TIM_HandleTypeDef htim4; // for PWM outputs
-
-extern TIM_HandleTypeDef htim6; // for DIN's data logging
+#include "./dlog_file.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 
-extern void TIM4_Init(void);
+extern "C" SPI_HandleTypeDef hspi1; // for DAC7760 and DAC7563
+extern "C" SPI_HandleTypeDef hspi2; // for ADC8674
+extern "C" SPI_HandleTypeDef hspi4; // for MASTER-SLAVE communication
+extern "C" TIM_HandleTypeDef htim4; // for PWM outputs
+
+extern "C" TIM_HandleTypeDef htim6; // for DIN's data logging
+
+////////////////////////////////////////////////////////////////////////////////
+
+extern "C" void TIM4_Init(void);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -27,7 +29,7 @@ enum SourceMode {
 	SOURCE_MODE_OPEN
 };
 
-typedef struct {
+struct FromMasterToSlaveParamsChange {
     uint8_t operation; // DISK_DRIVER_OPERATION_NONE
 
     uint8_t dinRanges;
@@ -57,14 +59,14 @@ typedef struct {
     } pwm[2];
 
     uint16_t dinReadPeriod;
-} FromMasterToSlaveParamsChange;
+};
 
-typedef struct {
+struct FromMasterToSlaveDiskDriveOperation {
     uint8_t operation; // enum DiskDriverOperation
     uint32_t sector;
     uint8_t cmd;
     uint8_t buffer[512];
-} FromMasterToSlaveDiskDriveOperation;
+};
 
 enum DiskDriverOperation {
     DISK_DRIVER_OPERATION_NONE,
@@ -77,20 +79,18 @@ enum DiskDriverOperation {
 
 #define FLAG_SD_CARD_PRESENT (1 << 0)
 #define FLAG_DIN_READ_OVERFLOW (1 << 1)
-#define FLAG_DISK_OPERATION_RESPONSE (1 << 2)
-
-#define MAX_DIN_VALUES 100
+#define FLAG_DIN_RECORD_FINISHED (1 << 2)
+#define FLAG_DISK_OPERATION_RESPONSE (1 << 3)
 
 #define DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE 4
 
-typedef struct {
+struct FromSlaveToMaster {
     uint8_t dinStates;
     uint16_t ainValues[4];
     uint8_t flags; // see FLAG_...
-	uint16_t numDinValues;
 	uint32_t diskOperationResult;
 	uint8_t buffer[512];
-} FromSlaveToMaster;
+};
 
 FromMasterToSlaveParamsChange currentState;
 
@@ -152,11 +152,77 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	}
 }
 
+void DinRead_FillParameters(dlog_file::Parameters &parameters) {
+}
+
+FRESULT DinRead_CreateRecordingsDir() {
+    FILINFO fno;
+    auto result = f_stat("/Recordings", &fno);
+	if (result != FR_OK) {
+		result = f_mkdir("/Recordings");
+	}
+	return result;
+}
+
+void DinRead_WriteHeader(dlog_file::Writer &writer) {
+	DinRead_CreateRecordingsDir();
+
+	FIL file;
+	auto result = f_open(&file, "/Recordings/latest.dlog", FILE_OPEN_APPEND | FILE_WRITE);
+	if (result != FR_OK) {
+		f_write()
+	}
+}
+
+void DinRead_StartFile() {
+	dlog_file::Parameters parameters;
+	DinRead_FillParameters(parameters);
+
+	uint8_t buffer[1024];
+	dlog_file::Writer writer(buffer, sizeof(buffer));
+	writeFileHeaderAndMetaFields(parameters);
+}
+
+void DinRead_WriteFile() {
+	//	if (currentState.dinReadPeriod > 0) {
+	//		uint32_t diff = g_dinReadBufferIndex - g_dinReadBufferTransferredIndex;
+	//
+	//		slaveToMaster->flags |= FLAG_DIN_READ_OVERFLOW;
+	//
+	//		if (diff > MAX_DIN_VALUES) {
+	//			diff = MAX_DIN_VALUES;
+	//		}
+	//		slaveToMaster->numDinValues = diff;
+	//
+	//		if (diff > 0) {
+	//			uint32_t from = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
+	//
+	//			g_dinReadBufferTransferredIndex += diff;
+	//
+	//			uint32_t to = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
+	//
+	//			if (from < to) {
+	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff);
+	//			} else {
+	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff - to);
+	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer, to);
+	//			}
+	//		}
+	//
+	//	} else {
+	//		slaveToMaster->numDinValues = 0;
+	//	}
+}
+
 void DinRead_Loop(FromMasterToSlaveParamsChange *newState) {
 	if (newState->dinReadPeriod != currentState.dinReadPeriod) {
-		HAL_TIM_Base_Stop_IT(&htim6);
+		if (currentState.dinReadPeriod > 0) {
+			HAL_TIM_Base_Stop_IT(&htim6);
+		}
 
 		if (newState->dinReadPeriod > 0) {
+			DinRead_StartFile();
+
 			TIM6->ARR = newState->dinReadPeriod;
 
 			g_dinReadTimerCounter = 0;
@@ -165,6 +231,8 @@ void DinRead_Loop(FromMasterToSlaveParamsChange *newState) {
 
 			HAL_TIM_Base_Start_IT(&htim6);
 		}
+	} else if (currentState.dinReadPeriod > 0) {
+		DinRead_WriteFile();
 	}
 }
 
@@ -248,8 +316,8 @@ void updateDoutStates(uint8_t newDoutStates) {
     }
 
     for (unsigned i = 0; i < 8; i++) {
-    	int oldState = currentDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-    	int newState = newDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+    	GPIO_PinState oldState = currentDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
+    	GPIO_PinState newState = newDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
     	if (oldState != newState) {
     		HAL_GPIO_WritePin(doutPort[i], doutPin[i], newState);
     	}
@@ -519,9 +587,9 @@ void slaveSynchro(void) {
     uint8_t txBuffer[15] = {
         SPI_SLAVE_SYNBYTE,
         FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR,
-        idw0 >> 24, (idw0 >> 16) & 0xFF, (idw0 >> 8) & 0xFF, idw0 & 0xFF,
-        idw1 >> 24, (idw1 >> 16) & 0xFF, (idw1 >> 8) & 0xFF, idw1 & 0xFF,
-        idw2 >> 24, (idw2 >> 16) & 0xFF, (idw2 >> 8) & 0xFF, idw2 & 0xFF
+        (uint8_t)(idw0 >> 24), (uint8_t)((idw0 >> 16) & 0xFF), (uint8_t)((idw0 >> 8) & 0xFF), (uint8_t)(idw0 & 0xFF),
+		(uint8_t)(idw1 >> 24), (uint8_t)((idw1 >> 16) & 0xFF), (uint8_t)((idw1 >> 8) & 0xFF), (uint8_t)(idw1 & 0xFF),
+		(uint8_t)(idw2 >> 24), (uint8_t)((idw2 >> 16) & 0xFF), (uint8_t)((idw2 >> 8) & 0xFF), (uint8_t)(idw2 & 0xFF)
     };
 
     uint8_t rxBuffer[15];
@@ -555,35 +623,6 @@ void beginTransfer() {
 		slaveToMaster->flags |= FLAG_SD_CARD_PRESENT;
 	}
 
-	if (currentState.dinReadPeriod > 0) {
-		uint32_t diff = g_dinReadBufferIndex - g_dinReadBufferTransferredIndex;
-
-		slaveToMaster->flags |= FLAG_DIN_READ_OVERFLOW;
-
-		if (diff > MAX_DIN_VALUES) {
-			diff = MAX_DIN_VALUES;
-		}
-		slaveToMaster->numDinValues = diff;
-
-		if (diff > 0) {
-			uint32_t from = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
-
-			g_dinReadBufferTransferredIndex += diff;
-
-			uint32_t to = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
-
-			if (from < to) {
-				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff);
-			} else {
-				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff - to);
-				memcpy(slaveToMaster->buffer, g_dinReadBuffer, to);
-			}
-		}
-
-	} else {
-		slaveToMaster->numDinValues = 0;
-	}
-
     transferCompleted = 0;
     HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, sizeof(FromSlaveToMaster));
     HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
@@ -610,7 +649,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 ////////////////////////////////////////////////////////////////////////////////
 // Setup & Loop
 
-void setup() {
+extern "C" void setup() {
 	resetState();
 
     slaveSynchro();
@@ -631,7 +670,7 @@ void setup() {
     //
 }
 
-void loop() {
+extern "C" void loop() {
 	uint32_t startTick = HAL_GetTick();
 	while (!transferCompleted) {
 		if (HAL_GetTick() - startTick > 500) {
