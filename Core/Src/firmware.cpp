@@ -2,11 +2,14 @@
 #include <memory.h>
 
 #include "main.h"
+#include "fatfs.h"
 #include <bsp_driver_sd.h>
 #include <ff_gen_drv.h>
 #include <sd_diskio.h>
 
 #include "./dlog_file.h"
+
+using namespace eez;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -23,10 +26,30 @@ extern "C" void TIM4_Init(void);
 
 ////////////////////////////////////////////////////////////////////////////////
 
+DWORD g_fatTime;
+
+////////////////////////////////////////////////////////////////////////////////
+
 enum SourceMode {
 	SOURCE_MODE_CURRENT,
 	SOURCE_MODE_VOLTAGE,
 	SOURCE_MODE_OPEN
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
+struct DlogParams {
+    float period;
+    float time;
+    uint32_t resources;
+};
+
+static const size_t CHANNEL_LABEL_MAX_LENGTH = 5;
+
+struct Labels {
+    char din[8 * (CHANNEL_LABEL_MAX_LENGTH + 1)];
+    char dout[8 * (CHANNEL_LABEL_MAX_LENGTH + 1)];
+    char ain[4 * (CHANNEL_LABEL_MAX_LENGTH + 1)];
 };
 
 struct FromMasterToSlaveParamsChange {
@@ -58,7 +81,11 @@ struct FromMasterToSlaveParamsChange {
         float duty;
     } pwm[2];
 
-    uint16_t dinReadPeriod;
+    DlogParams dlog;
+
+    Labels labels;
+
+	uint32_t fatTime;
 };
 
 struct FromMasterToSlaveDiskDriveOperation {
@@ -78,26 +105,43 @@ enum DiskDriverOperation {
 };
 
 #define FLAG_SD_CARD_PRESENT (1 << 0)
-#define FLAG_DIN_READ_OVERFLOW (1 << 1)
-#define FLAG_DIN_RECORD_FINISHED (1 << 2)
+#define FLAG_DLOG_RECORD_FINISHED (1 << 1)
+#define FLAG_DLOG_RECORD_STATUS (1 << 2)
 #define FLAG_DISK_OPERATION_RESPONSE (1 << 3)
+
+#define DLOG_RECORD_RESULT_OK 0
+#define DLOG_RECORD_RESULT_BUFFER_OVERFLOW 1
+#define DLOG_RECORD_RESULT_MASS_STORAGE_ERROR 2
+
+#define MAX_DIN_VALUES 100
 
 #define DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE 4
 
+struct DlogStatus {
+    uint32_t fileLength;
+    uint32_t numSamples;
+};
+
 struct FromSlaveToMaster {
+	uint8_t flags;
+    uint16_t result;
     uint8_t dinStates;
     uint16_t ainValues[4];
-    uint8_t flags; // see FLAG_...
-	uint32_t diskOperationResult;
-	uint8_t buffer[512];
+    union {
+    	uint8_t buffer[512];
+    	DlogStatus dlogStatus;
+    };
 };
+
+
+////////////////////////////////////////////////////////////////////////////////
 
 FromMasterToSlaveParamsChange currentState;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-uint8_t output[1024];
-uint8_t input[1024];
+uint8_t output[sizeof(FromSlaveToMaster)];
+uint8_t input[sizeof(FromSlaveToMaster)];
 
 volatile int transferCompleted;
 
@@ -134,106 +178,6 @@ void resetState() {
 ////////////////////////////////////////////////////////////////////////////////
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-uint32_t g_dinReadTimerCounter = 0;
-#define DIN_READ_BUFFER_SIZE 1000
-uint8_t g_dinReadBuffer[DIN_READ_BUFFER_SIZE];
-volatile uint32_t g_dinReadBufferIndex;
-uint32_t g_dinReadBufferTransferredIndex;
-
-uint8_t readDataInputs();
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	if (htim == &htim6) {
-		g_dinReadBuffer[g_dinReadBufferIndex++ % DIN_READ_BUFFER_SIZE] = readDataInputs();
-	}
-}
-
-void DinRead_FillParameters(dlog_file::Parameters &parameters) {
-}
-
-FRESULT DinRead_CreateRecordingsDir() {
-    FILINFO fno;
-    auto result = f_stat("/Recordings", &fno);
-	if (result != FR_OK) {
-		result = f_mkdir("/Recordings");
-	}
-	return result;
-}
-
-void DinRead_WriteHeader(dlog_file::Writer &writer) {
-	DinRead_CreateRecordingsDir();
-
-	FIL file;
-	auto result = f_open(&file, "/Recordings/latest.dlog", FILE_OPEN_APPEND | FILE_WRITE);
-	if (result != FR_OK) {
-		f_write()
-	}
-}
-
-void DinRead_StartFile() {
-	dlog_file::Parameters parameters;
-	DinRead_FillParameters(parameters);
-
-	uint8_t buffer[1024];
-	dlog_file::Writer writer(buffer, sizeof(buffer));
-	writeFileHeaderAndMetaFields(parameters);
-}
-
-void DinRead_WriteFile() {
-	//	if (currentState.dinReadPeriod > 0) {
-	//		uint32_t diff = g_dinReadBufferIndex - g_dinReadBufferTransferredIndex;
-	//
-	//		slaveToMaster->flags |= FLAG_DIN_READ_OVERFLOW;
-	//
-	//		if (diff > MAX_DIN_VALUES) {
-	//			diff = MAX_DIN_VALUES;
-	//		}
-	//		slaveToMaster->numDinValues = diff;
-	//
-	//		if (diff > 0) {
-	//			uint32_t from = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
-	//
-	//			g_dinReadBufferTransferredIndex += diff;
-	//
-	//			uint32_t to = g_dinReadBufferTransferredIndex % DIN_READ_BUFFER_SIZE;
-	//
-	//			if (from < to) {
-	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff);
-	//			} else {
-	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer + from, diff - to);
-	//				memcpy(slaveToMaster->buffer, g_dinReadBuffer, to);
-	//			}
-	//		}
-	//
-	//	} else {
-	//		slaveToMaster->numDinValues = 0;
-	//	}
-}
-
-void DinRead_Loop(FromMasterToSlaveParamsChange *newState) {
-	if (newState->dinReadPeriod != currentState.dinReadPeriod) {
-		if (currentState.dinReadPeriod > 0) {
-			HAL_TIM_Base_Stop_IT(&htim6);
-		}
-
-		if (newState->dinReadPeriod > 0) {
-			DinRead_StartFile();
-
-			TIM6->ARR = newState->dinReadPeriod;
-
-			g_dinReadTimerCounter = 0;
-			g_dinReadBufferIndex = 0;
-			g_dinReadBufferTransferredIndex = 0;
-
-			HAL_TIM_Base_Start_IT(&htim6);
-		}
-	} else if (currentState.dinReadPeriod > 0) {
-		DinRead_WriteFile();
-	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -574,6 +518,272 @@ void PWM_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+uint8_t g_dinResources;
+uint8_t g_doutResources;
+
+uint8_t g_buffer[80 * 1024];
+dlog_file::Writer g_writer(g_buffer, sizeof(g_buffer));
+
+uint32_t g_numSamples;
+uint32_t g_maxNumSamples;
+uint32_t g_lastSavedBufferIndex;
+
+uint8_t readDataInputs();
+
+// TODO remove after debugging
+volatile uint32_t g_diff;
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+	if (htim == &htim6) {
+		if (g_numSamples < g_maxNumSamples) {
+			if (g_dinResources & 0b00000001) g_writer.writeBit(DIN0_GPIO_Port->IDR & DIN0_Pin ? 1 : 0);
+			if (g_dinResources & 0b00000010) g_writer.writeBit(DIN1_GPIO_Port->IDR & DIN1_Pin ? 1 : 0);
+			if (g_dinResources & 0b00000100) g_writer.writeBit(DIN2_GPIO_Port->IDR & DIN2_Pin ? 1 : 0);
+			if (g_dinResources & 0b00001000) g_writer.writeBit(DIN3_GPIO_Port->IDR & DIN3_Pin ? 1 : 0);
+			if (g_dinResources & 0b00010000) g_writer.writeBit(DIN4_GPIO_Port->IDR & DIN4_Pin ? 1 : 0);
+			if (g_dinResources & 0b00100000) g_writer.writeBit(DIN5_GPIO_Port->IDR & DIN5_Pin ? 1 : 0);
+			if (g_dinResources & 0b01000000) g_writer.writeBit(DIN6_GPIO_Port->IDR & DIN6_Pin ? 1 : 0);
+			if (g_dinResources & 0b10000000) g_writer.writeBit(DIN7_GPIO_Port->IDR & DIN7_Pin ? 1 : 0);
+
+			if (g_doutResources & 0b00000001) g_writer.writeBit(currentState.doutStates & 0b00000001 ? 1 : 0);
+			if (g_doutResources & 0b00000010) g_writer.writeBit(currentState.doutStates & 0b00000010 ? 1 : 0);
+			if (g_doutResources & 0b00000100) g_writer.writeBit(currentState.doutStates & 0b00000100 ? 1 : 0);
+			if (g_doutResources & 0b00001000) g_writer.writeBit(currentState.doutStates & 0b00001000 ? 1 : 0);
+			if (g_doutResources & 0b00010000) g_writer.writeBit(currentState.doutStates & 0b00010000 ? 1 : 0);
+			if (g_doutResources & 0b00100000) g_writer.writeBit(currentState.doutStates & 0b00100000 ? 1 : 0);
+			if (g_doutResources & 0b01000000) g_writer.writeBit(currentState.doutStates & 0b01000000 ? 1 : 0);
+			if (g_doutResources & 0b10000000) g_writer.writeBit(currentState.doutStates & 0b10000000 ? 1 : 0);
+
+			g_writer.flushBits();
+
+			g_numSamples++;
+		}
+
+	    // TODO remove after debugging
+	    g_diff = g_writer.getBufferIndex() - g_lastSavedBufferIndex;
+	}
+}
+
+void DLOG_FillParameters(FromMasterToSlaveParamsChange *newState, dlog_file::Parameters &parameters) {
+	memset(&parameters, 0, sizeof(parameters));
+
+    parameters.xAxis.unit = UNIT_SECOND;
+    parameters.xAxis.step = newState->dlog.period;
+    parameters.xAxis.range.min = 0;
+    parameters.xAxis.range.max = newState->dlog.time;
+
+    parameters.yAxisScale = dlog_file::SCALE_LINEAR;
+
+    g_dinResources = newState->dlog.resources;
+    for (int i = 0; i < 8; i++) {
+    	if (g_dinResources & (1 << i)) {
+    		auto &yAxis = parameters.yAxes[parameters.numYAxes++];
+
+            yAxis.unit = UNIT_BIT;
+            yAxis.range.min = 0;
+            yAxis.range.max = 1;
+            yAxis.channelIndex = i;
+
+            strcpy(yAxis.label, newState->labels.din + i * (CHANNEL_LABEL_MAX_LENGTH + 1));
+    	}
+    }
+
+    g_doutResources = newState->dlog.resources >> 8;
+    for (int i = 0; i < 8; i++) {
+    	if (g_doutResources & (1 << i)) {
+    		auto &yAxis = parameters.yAxes[parameters.numYAxes++];
+
+            yAxis.unit = UNIT_BIT;
+            yAxis.range.min = 0;
+            yAxis.range.max = 1;
+            yAxis.channelIndex = 8 + i;
+
+            strcpy(yAxis.label, newState->labels.dout + i * (CHANNEL_LABEL_MAX_LENGTH + 1));
+    	}
+    }
+
+    parameters.period = newState->dlog.period;
+	parameters.time = newState->dlog.time;
+}
+
+bool g_mounted = false;
+
+FRESULT DLOG_CreateRecordingsDir() {
+	auto result = f_mount(&SDFatFS, (TCHAR const*)SDPath, 1);
+	if (result != FR_OK) {
+		return result;
+	}
+	g_mounted = true;
+
+    FILINFO fno;
+    result = f_stat("/Recordings", &fno);
+	if (result != FR_OK) {
+		result = f_mkdir("/Recordings");
+	}
+	return result;
+}
+
+FIL g_file;
+
+FRESULT DLOG_WriteHeader() {
+	auto result = DLOG_CreateRecordingsDir();
+	if (result != FR_OK) {
+		return result;
+	}
+
+	//result = f_open(&file, "/Recordings/latest.dlog", FA_WRITE | FA_CREATE_ALWAYS);
+	result = f_open(&g_file, "/Recordings/latest.dlog", FA_WRITE | FA_CREATE_ALWAYS);
+	if (result != FR_OK) {
+		return result;
+	}
+
+	UINT bw;
+	//result = f_write(&file, g_writer.getBuffer(), g_writer.getDataOffset(), &bw);
+	result = f_write(&g_file, g_writer.getBuffer(), g_writer.getDataOffset(), &bw);
+	if (result != FR_OK) {
+		goto Exit;
+	}
+
+	if (bw < g_writer.getDataOffset()) {
+		// disk is full
+		result = FR_DENIED;
+		goto Exit;
+	}
+
+Exit:
+	return result;
+}
+
+FRESULT DLOG_StartFile(FromMasterToSlaveParamsChange *newState) {
+	dlog_file::Parameters parameters;
+	DLOG_FillParameters(newState, parameters);
+
+	g_writer.reset();
+	g_writer.writeFileHeaderAndMetaFields(parameters);
+	return DLOG_WriteHeader();
+}
+
+uint32_t DLOG_WriteFile() {
+	uint32_t diff = g_writer.getBufferIndex() - g_lastSavedBufferIndex;
+
+	// TODO remove after debugging
+	g_diff = diff;
+
+	// TODO add buffer overflow handler
+//	if (diff > sizeof(g_buffer) - 16384) {
+//		return DLOG_RECORD_RESULT_BUFFER_OVERFLOW;
+//	}
+
+	if (diff > 32768) {
+		diff = 32768;
+
+		uint32_t from = g_lastSavedBufferIndex % sizeof(g_buffer);
+
+		g_lastSavedBufferIndex += diff;
+
+		uint32_t to = g_lastSavedBufferIndex % sizeof(g_buffer);
+
+		FRESULT result;
+
+		UINT bw;
+
+		if (from < to) {
+			result = f_write(&g_file, g_writer.getBuffer() + from, diff, &bw);
+			if (result != FR_OK) {
+				goto Exit;
+			}
+			if (bw < diff) {
+				// disk is full
+				result = FR_DENIED;
+				goto Exit;
+			}
+		} else {
+			result = f_write(&g_file, g_writer.getBuffer() + from, diff - to, &bw);
+			if (result != FR_OK) {
+				goto Exit;
+			}
+			if (bw < diff - to) {
+				// disk is full
+				result = FR_DENIED;
+				goto Exit;
+			}
+
+			result = f_write(&g_file, g_writer.getBuffer(), to, &bw);
+			if (result != FR_OK) {
+				goto Exit;
+			}
+			if (bw < to) {
+				// disk is full
+				result = FR_DENIED;
+				goto Exit;
+			}
+		}
+
+Exit:
+		return result != FR_OK ? DLOG_RECORD_RESULT_MASS_STORAGE_ERROR : DLOG_RECORD_RESULT_OK;
+	}
+
+	return DLOG_RECORD_RESULT_OK;
+}
+
+void DLOG_CloseFile() {
+	f_close(&g_file);
+	// unmount
+	f_mount(NULL, 0, 0);
+	g_mounted = false;
+}
+
+void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
+	auto slaveToMaster = (FromSlaveToMaster *)output;
+
+	if (newState->dlog.period != currentState.dlog.period) {
+		if (currentState.dlog.period > 0) {
+			HAL_TIM_Base_Stop_IT(&htim6);
+		}
+
+		if (newState->dlog.period > 0) {
+			auto result = DLOG_StartFile(newState);
+			if (result != FR_OK) {
+				DLOG_CloseFile();
+
+				slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
+				slaveToMaster->result = DLOG_RECORD_RESULT_MASS_STORAGE_ERROR;
+			} else {
+				TIM6->ARR = (uint16_t)(newState->dlog.period * 1000000); // convert to microseconds
+
+				g_numSamples = 0;
+				g_maxNumSamples = (uint32_t)(newState->dlog.time / newState->dlog.period);
+
+				g_lastSavedBufferIndex = g_writer.getDataOffset();
+
+				slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
+				slaveToMaster->dlogStatus.numSamples = g_numSamples;
+
+				HAL_TIM_Base_Start_IT(&htim6);
+			}
+		} else {
+			DLOG_CloseFile();
+		}
+	} else if (currentState.dlog.period > 0) {
+		auto result = DLOG_WriteFile();
+
+		slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
+		slaveToMaster->dlogStatus.numSamples = g_numSamples;
+
+		if (result != DLOG_RECORD_RESULT_OK) {
+			DLOG_CloseFile();
+
+			slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
+			slaveToMaster->result = result;
+
+			currentState.dlog.period = 0;
+			HAL_TIM_Base_Stop_IT(&htim6);
+		}
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // MASTER - SLAVE Communication
 
 #define SPI_SLAVE_SYNBYTE         0x53
@@ -679,6 +889,8 @@ extern "C" void loop() {
 			transferCompleted = 2;
 			break;
 		}
+
+		DLOG_Loop(&currentState);
 	}
 
 	FromSlaveToMaster *slaveToMaster = (FromSlaveToMaster *)output;
@@ -693,7 +905,9 @@ extern "C" void loop() {
 				updateDoutStates(newState->doutStates);
 			}
 
-			DinRead_Loop(newState);
+			g_fatTime = newState->fatTime;
+
+			DLOG_Loop(newState);
 
 			Din_Loop(newState);
 
@@ -713,16 +927,36 @@ extern "C" void loop() {
 			FromMasterToSlaveDiskDriveOperation *diskDriveOperation = (FromMasterToSlaveDiskDriveOperation *)input;
 
 			if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_INITIALIZE) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_initialize(0);
+				if (g_mounted) {
+					slaveToMaster->result = STA_NOINIT;
+				} else {
+					slaveToMaster->result = (uint32_t)SD_Driver.disk_initialize(0);
+				}
 			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_STATUS) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_status(0);
+				if (g_mounted) {
+					slaveToMaster->result = STA_NOINIT;
+				} else {
+					slaveToMaster->result = (uint32_t)SD_Driver.disk_status(0);
+				}
 			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_READ) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_read(0, slaveToMaster->buffer, diskDriveOperation->sector, 1);
+				if (g_mounted) {
+					slaveToMaster->result = RES_ERROR;
+				} else {
+					slaveToMaster->result = (uint32_t)SD_Driver.disk_read(0, slaveToMaster->buffer, diskDriveOperation->sector, 1);
+				}
 			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_WRITE) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_write(0, diskDriveOperation->buffer, diskDriveOperation->sector, 1);
+				if (g_mounted) {
+					slaveToMaster->result = RES_ERROR;
+				} else {
+					slaveToMaster->result = (uint32_t)SD_Driver.disk_write(0, diskDriveOperation->buffer, diskDriveOperation->sector, 1);
+				}
 			} else if (diskDriveOperation->operation == DISK_DRIVER_OPERATION_IOCTL) {
-				slaveToMaster->diskOperationResult = (uint32_t)SD_Driver.disk_ioctl(0, diskDriveOperation->cmd, diskDriveOperation->buffer);
-				memcpy(slaveToMaster->buffer, diskDriveOperation->buffer, DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE);
+				if (g_mounted) {
+					slaveToMaster->result = RES_ERROR;
+				} else {
+					slaveToMaster->result = (uint32_t)SD_Driver.disk_ioctl(0, diskDriveOperation->cmd, diskDriveOperation->buffer);
+					memcpy(slaveToMaster->buffer, diskDriveOperation->buffer, DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE);
+				}
 			}
 
 			slaveToMaster->flags |= FLAG_DISK_OPERATION_RESPONSE;
