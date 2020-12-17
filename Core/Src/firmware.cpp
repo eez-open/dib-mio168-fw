@@ -13,12 +13,19 @@ using namespace eez;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-extern "C" SPI_HandleTypeDef hspi1; // for DAC7760 and DAC7563
-extern "C" SPI_HandleTypeDef hspi2; // for ADC8674
-extern "C" SPI_HandleTypeDef hspi4; // for MASTER-SLAVE communication
+extern "C" SPI_HandleTypeDef hspi1;
+extern "C" SPI_HandleTypeDef hspi2;
+extern "C" SPI_HandleTypeDef hspi4;
+
 extern "C" TIM_HandleTypeDef htim4; // for PWM outputs
 
 extern "C" TIM_HandleTypeDef htim6; // for DIN's data logging
+
+////////////////////////////////////////////////////////////////////////////////
+
+SPI_HandleTypeDef *hspiDAC = &hspi1; // for DAC7760 and DAC7563
+SPI_HandleTypeDef *hspiADC = &hspi2; // for ADC8674
+SPI_HandleTypeDef *hspiMaster = &hspi4; // for MASTER-SLAVE communication
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -274,8 +281,6 @@ void updateDoutStates(uint8_t newDoutStates) {
 uint16_t adcIn[] = { 0xC000, 0x0000, 0xC000, 0x0000 };
 uint16_t adcOut[] = { 0x0000, 0x0000, 0x0000, 0x0000 };
 
-SPI_HandleTypeDef *ADC_hspi = &hspi2;
-
 GPIO_TypeDef* voltSwPorts[4] = { VOLT_SW0_GPIO_Port, VOLT_SW1_GPIO_Port, VOLT_SW2_GPIO_Port, VOLT_SW3_GPIO_Port };
 uint16_t      voltSwPins [4] = { VOLT_SW0_Pin,       VOLT_SW1_Pin,       VOLT_SW2_Pin,       VOLT_SW3_Pin       };
 
@@ -308,7 +313,7 @@ void ADC_Loop(FromMasterToSlaveParamsChange *newState) {
 		if (newState->ain[i].range != currentState.ain[i].range) {
 			adcIn[0] = ((((0x05 + i) << 1) | 1) << 8) | newState->ain[i].range;
 			ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-			HAL_SPI_TransmitReceive(ADC_hspi, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
+			HAL_SPI_TransmitReceive(hspiADC, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
 			ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 		}
 
@@ -321,13 +326,13 @@ void ADC_Loop(FromMasterToSlaveParamsChange *newState) {
 
 	adcIn[0] = 0xC000;
 	ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-	HAL_SPI_TransmitReceive(ADC_hspi, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
+	HAL_SPI_TransmitReceive(hspiADC, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
 	ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 
 	for (int i = 0; i < 4; i++) {
 		adcIn[0] = manualChannelSelect[i];
 		ADC_CS_GPIO_Port->BSRR = (uint32_t)ADC_CS_Pin << 16U; // RESET ADC CS
-		HAL_SPI_TransmitReceive(ADC_hspi, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
+		HAL_SPI_TransmitReceive(hspiADC, (uint8_t *)adcIn, (uint8_t *)adcOut, 4, TIMEOUT);
 		ADC_CS_GPIO_Port->BSRR = ADC_CS_Pin; // SET ADC CS
 
 		ADC_samples[i] = adcOut[1];
@@ -344,7 +349,7 @@ void ADC_Loop(FromMasterToSlaveParamsChange *newState) {
 void DAC_SpiWrite(int i, uint8_t b0, uint8_t b1, uint8_t b2) {
     uint8_t buf[3] = { b0, b1, b2 };
 
-    HAL_SPI_Transmit(&hspi1, buf, 3, 100);
+    HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
 
     if (i == 0) {
     	HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_SET);
@@ -430,7 +435,7 @@ void DAC_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 void DACDual_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
     uint8_t buf[3] = { b0, b1, b2 };
     HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_RESET);
-    HAL_SPI_Transmit(&hspi1, buf, 3, 100);
+    HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
     HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_SET);
 }
 
@@ -750,7 +755,7 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 				slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
 				slaveToMaster->result = DLOG_RECORD_RESULT_MASS_STORAGE_ERROR;
 			} else {
-				TIM6->ARR = (uint16_t)(newState->dlog.period * 1000000); // convert to microseconds
+				TIM6->ARR = (uint16_t)(newState->dlog.period * 10000000) - 1; // convert to microseconds
 
 				g_numSamples = 0;
 				g_maxNumSamples = (uint32_t)(newState->dlog.time / newState->dlog.period);
@@ -759,6 +764,7 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 
 				slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
 				slaveToMaster->dlogStatus.numSamples = g_numSamples;
+				slaveToMaster->flags |= FLAG_DLOG_RECORD_STATUS;
 
 				HAL_TIM_Base_Start_IT(&htim6);
 			}
@@ -770,6 +776,7 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 
 		slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
 		slaveToMaster->dlogStatus.numSamples = g_numSamples;
+		slaveToMaster->flags |= FLAG_DLOG_RECORD_STATUS;
 
 		if (result != DLOG_RECORD_RESULT_OK) {
 			DLOG_CloseFile();
@@ -806,7 +813,7 @@ void slaveSynchro(void) {
 
 	while (1) {
 		transferCompleted = 0;
-		HAL_StatusTypeDef result = HAL_SPI_TransmitReceive_DMA(&hspi4, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
+		HAL_StatusTypeDef result = HAL_SPI_TransmitReceive_DMA(hspiMaster, (uint8_t *)&txBuffer, (uint8_t *)&rxBuffer, sizeof(rxBuffer));
 		if (result == HAL_OK) {
 			HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 			while (!transferCompleted) {
@@ -834,12 +841,12 @@ void beginTransfer() {
 	}
 
     transferCompleted = 0;
-    HAL_SPI_TransmitReceive_DMA(&hspi4, output, input, sizeof(FromSlaveToMaster));
+    HAL_SPI_TransmitReceive_DMA(hspiMaster, output, input, sizeof(FromSlaveToMaster));
     HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
-	if (hspi == ADC_hspi) {
+	if (hspi == hspiADC) {
 		return;
 	}
 
@@ -848,7 +855,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
-	if (hspi == ADC_hspi) {
+	if (hspi == hspiADC) {
 		return;
 	}
 
@@ -884,7 +891,7 @@ extern "C" void loop() {
 	uint32_t startTick = HAL_GetTick();
 	while (!transferCompleted) {
 		if (HAL_GetTick() - startTick > 500) {
-			HAL_SPI_Abort(&hspi4);
+			HAL_SPI_Abort(hspiMaster);
 			HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
 			transferCompleted = 2;
 			break;
