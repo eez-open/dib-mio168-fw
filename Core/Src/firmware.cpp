@@ -47,7 +47,7 @@ enum SourceMode {
 
 struct DlogParams {
     float period;
-    float time;
+    float duration;
     uint32_t resources;
 };
 
@@ -538,6 +538,7 @@ uint8_t readDataInputs();
 
 // TODO remove after debugging
 volatile uint32_t g_diff;
+volatile uint32_t g_writing;
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim6) {
@@ -576,7 +577,7 @@ void DLOG_FillParameters(FromMasterToSlaveParamsChange *newState, dlog_file::Par
     parameters.xAxis.unit = UNIT_SECOND;
     parameters.xAxis.step = newState->dlog.period;
     parameters.xAxis.range.min = 0;
-    parameters.xAxis.range.max = newState->dlog.time;
+    parameters.xAxis.range.max = newState->dlog.duration;
 
     parameters.yAxisScale = dlog_file::SCALE_LINEAR;
 
@@ -609,7 +610,7 @@ void DLOG_FillParameters(FromMasterToSlaveParamsChange *newState, dlog_file::Par
     }
 
     parameters.period = newState->dlog.period;
-	parameters.time = newState->dlog.time;
+	parameters.duration = newState->dlog.duration;
 }
 
 bool g_mounted = false;
@@ -642,6 +643,11 @@ FRESULT DLOG_WriteHeader() {
 	if (result != FR_OK) {
 		return result;
 	}
+
+//	result = f_expand(&g_file, 50 * 1024 * 1024, 0);
+//	if (result != FR_OK) {
+//		goto Exit;
+//	}
 
 	UINT bw;
 	//result = f_write(&file, g_writer.getBuffer(), g_writer.getDataOffset(), &bw);
@@ -685,16 +691,18 @@ uint32_t DLOG_WriteFile() {
 
 		uint32_t from = g_lastSavedBufferIndex % sizeof(g_buffer);
 
-		g_lastSavedBufferIndex += diff;
+		uint32_t newSavedBufferIndex = g_lastSavedBufferIndex + diff;
 
-		uint32_t to = g_lastSavedBufferIndex % sizeof(g_buffer);
+		uint32_t to = newSavedBufferIndex % sizeof(g_buffer);
 
 		FRESULT result;
 
 		UINT bw;
 
 		if (from < to) {
+			g_writing = 32768;
 			result = f_write(&g_file, g_writer.getBuffer() + from, diff, &bw);
+			g_writing = 0;
 			if (result != FR_OK) {
 				goto Exit;
 			}
@@ -704,7 +712,9 @@ uint32_t DLOG_WriteFile() {
 				goto Exit;
 			}
 		} else {
+			g_writing = 32768;
 			result = f_write(&g_file, g_writer.getBuffer() + from, diff - to, &bw);
+			g_writing = 0;
 			if (result != FR_OK) {
 				goto Exit;
 			}
@@ -714,7 +724,9 @@ uint32_t DLOG_WriteFile() {
 				goto Exit;
 			}
 
+			g_writing = 32768;
 			result = f_write(&g_file, g_writer.getBuffer(), to, &bw);
+			g_writing = 0;
 			if (result != FR_OK) {
 				goto Exit;
 			}
@@ -724,6 +736,8 @@ uint32_t DLOG_WriteFile() {
 				goto Exit;
 			}
 		}
+
+		g_lastSavedBufferIndex = newSavedBufferIndex;
 
 Exit:
 		return result != FR_OK ? DLOG_RECORD_RESULT_MASS_STORAGE_ERROR : DLOG_RECORD_RESULT_OK;
@@ -758,7 +772,7 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 				TIM6->ARR = (uint16_t)(newState->dlog.period * 10000000) - 1; // convert to microseconds
 
 				g_numSamples = 0;
-				g_maxNumSamples = (uint32_t)(newState->dlog.time / newState->dlog.period);
+				g_maxNumSamples = (uint32_t)(newState->dlog.duration / newState->dlog.period);
 
 				g_lastSavedBufferIndex = g_writer.getDataOffset();
 
