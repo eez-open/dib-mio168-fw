@@ -45,10 +45,13 @@ enum SourceMode {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#define MAX_PATH_LENGTH 255
+
 struct DlogParams {
     float period;
     float duration;
     uint32_t resources;
+    char filePath[MAX_PATH_LENGTH + 1];
 };
 
 static const size_t CHANNEL_LABEL_MAX_LENGTH = 5;
@@ -527,8 +530,11 @@ void PWM_Loop(int i, FromMasterToSlaveParamsChange *newState) {
 uint8_t g_dinResources;
 uint8_t g_doutResources;
 
-uint8_t g_buffer[80 * 1024];
-dlog_file::Writer g_writer(g_buffer, sizeof(g_buffer));
+uint8_t g_writerBuffer[64 * 1024];
+dlog_file::Writer g_writer(g_writerBuffer, sizeof(g_writerBuffer));
+
+uint8_t g_fileWriteBuffer[32 * 1024];
+uint32_t g_fileWriteBufferIndex;
 
 uint32_t g_numSamples;
 uint32_t g_maxNumSamples;
@@ -543,6 +549,9 @@ volatile uint32_t g_writing;
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim6) {
 		if (g_numSamples < g_maxNumSamples) {
+			// this is valid sample
+			g_writer.writeBit(1);
+
 			if (g_dinResources & 0b00000001) g_writer.writeBit(DIN0_GPIO_Port->IDR & DIN0_Pin ? 1 : 0);
 			if (g_dinResources & 0b00000010) g_writer.writeBit(DIN1_GPIO_Port->IDR & DIN1_Pin ? 1 : 0);
 			if (g_dinResources & 0b00000100) g_writer.writeBit(DIN2_GPIO_Port->IDR & DIN2_Pin ? 1 : 0);
@@ -565,9 +574,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
 			g_numSamples++;
 		}
-
-	    // TODO remove after debugging
-	    g_diff = g_writer.getBufferIndex() - g_lastSavedBufferIndex;
 	}
 }
 
@@ -632,25 +638,18 @@ FRESULT DLOG_CreateRecordingsDir() {
 
 FIL g_file;
 
-FRESULT DLOG_WriteHeader() {
+FRESULT DLOG_WriteHeader(FromMasterToSlaveParamsChange *newState) {
 	auto result = DLOG_CreateRecordingsDir();
 	if (result != FR_OK) {
 		return result;
 	}
 
-	//result = f_open(&file, "/Recordings/latest.dlog", FA_WRITE | FA_CREATE_ALWAYS);
-	result = f_open(&g_file, "/Recordings/latest.dlog", FA_WRITE | FA_CREATE_ALWAYS);
+	result = f_open(&g_file, newState->dlog.filePath, FA_WRITE | FA_CREATE_ALWAYS);
 	if (result != FR_OK) {
 		return result;
 	}
 
-//	result = f_expand(&g_file, 50 * 1024 * 1024, 0);
-//	if (result != FR_OK) {
-//		goto Exit;
-//	}
-
 	UINT bw;
-	//result = f_write(&file, g_writer.getBuffer(), g_writer.getDataOffset(), &bw);
 	result = f_write(&g_file, g_writer.getBuffer(), g_writer.getDataOffset(), &bw);
 	if (result != FR_OK) {
 		goto Exit;
@@ -672,72 +671,69 @@ FRESULT DLOG_StartFile(FromMasterToSlaveParamsChange *newState) {
 
 	g_writer.reset();
 	g_writer.writeFileHeaderAndMetaFields(parameters);
-	return DLOG_WriteHeader();
+	return DLOG_WriteHeader(newState);
 }
 
-uint32_t DLOG_WriteFile() {
-	uint32_t diff = g_writer.getBufferIndex() - g_lastSavedBufferIndex;
+uint32_t DLOG_WriteFile(bool flush = false) {
+	__disable_irq();
+	{
+		uint32_t n = sizeof(g_fileWriteBuffer) - g_fileWriteBufferIndex;
 
-	// TODO remove after debugging
-	g_diff = diff;
+		uint32_t writerBufferIndex = g_writer.getBufferIndex();
+		uint32_t diff = writerBufferIndex - g_lastSavedBufferIndex;
 
-	// TODO add buffer overflow handler
-//	if (diff > sizeof(g_buffer) - 16384) {
-//		return DLOG_RECORD_RESULT_BUFFER_OVERFLOW;
-//	}
-
-	if (diff > 32768) {
-		diff = 32768;
-
-		uint32_t from = g_lastSavedBufferIndex % sizeof(g_buffer);
-
-		uint32_t newSavedBufferIndex = g_lastSavedBufferIndex + diff;
-
-		uint32_t to = newSavedBufferIndex % sizeof(g_buffer);
-
-		FRESULT result;
-
-		UINT bw;
-
-		if (from < to) {
-			g_writing = 32768;
-			result = f_write(&g_file, g_writer.getBuffer() + from, diff, &bw);
-			g_writing = 0;
-			if (result != FR_OK) {
-				goto Exit;
-			}
-			if (bw < diff) {
-				// disk is full
-				result = FR_DENIED;
-				goto Exit;
-			}
-		} else {
-			g_writing = 32768;
-			result = f_write(&g_file, g_writer.getBuffer() + from, diff - to, &bw);
-			g_writing = 0;
-			if (result != FR_OK) {
-				goto Exit;
-			}
-			if (bw < diff - to) {
-				// disk is full
-				result = FR_DENIED;
-				goto Exit;
-			}
-
-			g_writing = 32768;
-			result = f_write(&g_file, g_writer.getBuffer(), to, &bw);
-			g_writing = 0;
-			if (result != FR_OK) {
-				goto Exit;
-			}
-			if (bw < to) {
-				// disk is full
-				result = FR_DENIED;
-				goto Exit;
-			}
+		if (diff < n) {
+			n = diff;
 		}
 
-		g_lastSavedBufferIndex = newSavedBufferIndex;
+		if (diff > sizeof(g_writerBuffer)) {
+			// overflow detected
+
+			uint32_t nInvalid = diff - sizeof(g_writerBuffer);
+			if (nInvalid >= n) {
+				nInvalid = n;
+			}
+
+			// TODO remove after debugging
+			g_diff = nInvalid;
+
+			// invalid samples
+			memset(g_fileWriteBuffer + g_fileWriteBufferIndex, 0, nInvalid);
+			g_fileWriteBufferIndex += nInvalid;
+			g_lastSavedBufferIndex += nInvalid;
+
+			n -= nInvalid;
+		} else {
+			// TODO remove after debugging
+			g_diff = 0;
+		}
+
+		if (n > 0) {
+			uint32_t from = g_lastSavedBufferIndex % sizeof(g_writerBuffer);
+			memcpy(g_fileWriteBuffer + g_fileWriteBufferIndex, g_writerBuffer + from, n);
+			g_fileWriteBufferIndex += n;
+			g_lastSavedBufferIndex += n;
+		}
+	}
+	__enable_irq();
+
+	if (g_fileWriteBufferIndex == sizeof(g_fileWriteBuffer) || flush) {
+		UINT btw = g_fileWriteBufferIndex;
+		g_writing = btw;
+		UINT bw;
+		FRESULT result = f_write(&g_file, g_fileWriteBuffer, btw, &bw);
+		g_writing = 0;
+
+		if (result != FR_OK) {
+			goto Exit;
+		}
+		if (bw < btw) {
+			// disk is full
+			result = FR_DENIED;
+			goto Exit;
+		}
+
+		g_fileWriteBufferIndex = 0;
 
 Exit:
 		return result != FR_OK ? DLOG_RECORD_RESULT_MASS_STORAGE_ERROR : DLOG_RECORD_RESULT_OK;
@@ -751,6 +747,26 @@ void DLOG_CloseFile() {
 	// unmount
 	f_mount(NULL, 0, 0);
 	g_mounted = false;
+}
+
+void DLOG_LoopWrite() {
+	auto slaveToMaster = (FromSlaveToMaster *)output;
+
+	if (g_mounted) {
+		auto result = DLOG_WriteFile(false);
+
+		slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
+		slaveToMaster->dlogStatus.numSamples = g_numSamples;
+		slaveToMaster->flags |= FLAG_DLOG_RECORD_STATUS;
+
+		if (result != DLOG_RECORD_RESULT_OK) {
+			slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
+			slaveToMaster->result = result;
+		} else if (g_numSamples >= g_maxNumSamples) {
+			slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
+			slaveToMaster->result = DLOG_RECORD_RESULT_OK;
+		}
+	}
 }
 
 void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
@@ -772,9 +788,10 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 				TIM6->ARR = (uint16_t)(newState->dlog.period * 10000000) - 1; // convert to microseconds
 
 				g_numSamples = 0;
-				g_maxNumSamples = (uint32_t)(newState->dlog.duration / newState->dlog.period);
+				g_maxNumSamples = (uint32_t)(newState->dlog.duration / newState->dlog.period) + 1;
 
 				g_lastSavedBufferIndex = g_writer.getDataOffset();
+				g_fileWriteBufferIndex = 0;
 
 				slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
 				slaveToMaster->dlogStatus.numSamples = g_numSamples;
@@ -782,25 +799,27 @@ void DLOG_Loop(FromMasterToSlaveParamsChange *newState) {
 
 				HAL_TIM_Base_Start_IT(&htim6);
 			}
-		} else {
-			DLOG_CloseFile();
-		}
-	} else if (currentState.dlog.period > 0) {
-		auto result = DLOG_WriteFile();
+		} else if (g_mounted) {
+			// flush buffer
+			uint32_t result = DLOG_RECORD_RESULT_OK;
+			do {
+				result = DLOG_WriteFile(true);
+				if (result != DLOG_RECORD_RESULT_OK) {
+					break;
+				}
+			} while (g_lastSavedBufferIndex < g_writer.getBufferIndex());
 
-		slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
-		slaveToMaster->dlogStatus.numSamples = g_numSamples;
-		slaveToMaster->flags |= FLAG_DLOG_RECORD_STATUS;
+			slaveToMaster->dlogStatus.fileLength = g_writer.getFileLength();
+			slaveToMaster->dlogStatus.numSamples = g_numSamples;
+			slaveToMaster->flags |= FLAG_DLOG_RECORD_STATUS;
 
-		if (result != DLOG_RECORD_RESULT_OK) {
 			DLOG_CloseFile();
 
 			slaveToMaster->flags |= FLAG_DLOG_RECORD_FINISHED;
 			slaveToMaster->result = result;
-
-			currentState.dlog.period = 0;
-			HAL_TIM_Base_Stop_IT(&htim6);
 		}
+	} else {
+		DLOG_LoopWrite();
 	}
 }
 
@@ -911,7 +930,7 @@ extern "C" void loop() {
 			break;
 		}
 
-		DLOG_Loop(&currentState);
+		DLOG_LoopWrite();
 	}
 
 	FromSlaveToMaster *slaveToMaster = (FromSlaveToMaster *)output;
