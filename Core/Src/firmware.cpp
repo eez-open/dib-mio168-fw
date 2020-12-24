@@ -11,6 +11,14 @@
 
 using namespace eez;
 
+////////////////////////////////////////////////////////////////////////////////
+
+#define READ_PIN(PORT, PIN) ((PORT->IDR & PIN) ? 1 : 0)
+#define SET_PIN(PORT, PIN) PORT->BSRR = PIN
+#define RESET_PIN(PORT, PIN) PORT->BSRR = (uint32_t)PIN << 16
+
+////////////////////////////////////////////////////////////////////////////////
+
 // TODO remove after debugging
 volatile uint32_t g_debugVarCrcError;
 volatile uint32_t g_debugVarOtherError;
@@ -33,7 +41,7 @@ extern "C" TIM_HandleTypeDef htim6; // for DIN's data logging
 ////////////////////////////////////////////////////////////////////////////////
 
 SPI_HandleTypeDef *hspiDAC = &hspi2; // for DAC7760 and DAC7563
-SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC8674
+SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 SPI_HandleTypeDef *hspiMaster = &hspi4; // for MASTER-SLAVE communication
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -267,14 +275,14 @@ uint16_t dinSpeedPins[2] = {
 
 uint8_t readDataInputs() {
 	return
-		(HAL_GPIO_ReadPin(DIN0_GPIO_Port, DIN0_Pin) << 0) |
-		(HAL_GPIO_ReadPin(DIN1_GPIO_Port, DIN1_Pin) << 1) |
-		(HAL_GPIO_ReadPin(DIN2_GPIO_Port, DIN2_Pin) << 2) |
-		(HAL_GPIO_ReadPin(DIN3_GPIO_Port, DIN3_Pin) << 3) |
-		(HAL_GPIO_ReadPin(DIN4_GPIO_Port, DIN4_Pin) << 4) |
-		(HAL_GPIO_ReadPin(DIN5_GPIO_Port, DIN5_Pin) << 5) |
-		(HAL_GPIO_ReadPin(DIN6_GPIO_Port, DIN6_Pin) << 6) |
-		(HAL_GPIO_ReadPin(DIN7_GPIO_Port, DIN7_Pin) << 7);
+		(READ_PIN(DIN0_GPIO_Port, DIN0_Pin) << 0) |
+		(READ_PIN(DIN1_GPIO_Port, DIN1_Pin) << 1) |
+		(READ_PIN(DIN2_GPIO_Port, DIN2_Pin) << 2) |
+		(READ_PIN(DIN3_GPIO_Port, DIN3_Pin) << 3) |
+		(READ_PIN(DIN4_GPIO_Port, DIN4_Pin) << 4) |
+		(READ_PIN(DIN5_GPIO_Port, DIN5_Pin) << 5) |
+		(READ_PIN(DIN6_GPIO_Port, DIN6_Pin) << 6) |
+		(READ_PIN(DIN7_GPIO_Port, DIN7_Pin) << 7);
 }
 
 void Din_Setup() {
@@ -333,13 +341,30 @@ void updateDoutStates(uint8_t newDoutStates) {
 uint16_t ADC_samples[4];
 
 void ADC_Setup() {
+	// hspiADC
+#if 0
+	uint8_t buf[10];
+	HAL_SPI_Transmit(hspiADC, buf, 10, 100);
+
+	SET_PIN(ADC_START_GPIO_Port, ADC_START_Pin);
+	for (int i = 0; i < 10; i++) {}
+	RESET_PIN(ADC_START_GPIO_Port, ADC_START_Pin);
+
+	while (READ_PIN(ADC_DRDY_GPIO_Port, ADC_DRDY_Pin)) {
+	}
+
+	// select ADC
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
+
+	// deselect ADC
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
+#endif
 }
 
 void ADC_SetParams(SetParams &newState) {
 }
 
 void ADC_Measure() {
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -553,14 +578,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 			// this is valid sample
 			g_writer.writeBit(1);
 
-			if (g_dinResources & 0b00000001) g_writer.writeBit(DIN0_GPIO_Port->IDR & DIN0_Pin ? 1 : 0);
-			if (g_dinResources & 0b00000010) g_writer.writeBit(DIN1_GPIO_Port->IDR & DIN1_Pin ? 1 : 0);
-			if (g_dinResources & 0b00000100) g_writer.writeBit(DIN2_GPIO_Port->IDR & DIN2_Pin ? 1 : 0);
-			if (g_dinResources & 0b00001000) g_writer.writeBit(DIN3_GPIO_Port->IDR & DIN3_Pin ? 1 : 0);
-			if (g_dinResources & 0b00010000) g_writer.writeBit(DIN4_GPIO_Port->IDR & DIN4_Pin ? 1 : 0);
-			if (g_dinResources & 0b00100000) g_writer.writeBit(DIN5_GPIO_Port->IDR & DIN5_Pin ? 1 : 0);
-			if (g_dinResources & 0b01000000) g_writer.writeBit(DIN6_GPIO_Port->IDR & DIN6_Pin ? 1 : 0);
-			if (g_dinResources & 0b10000000) g_writer.writeBit(DIN7_GPIO_Port->IDR & DIN7_Pin ? 1 : 0);
+			if (g_dinResources & 0b00000001) g_writer.writeBit(READ_PIN(DIN0_GPIO_Port, DIN0_Pin) ? 1 : 0);
+			if (g_dinResources & 0b00000010) g_writer.writeBit(READ_PIN(DIN1_GPIO_Port, DIN1_Pin) ? 1 : 0);
+			if (g_dinResources & 0b00000100) g_writer.writeBit(READ_PIN(DIN2_GPIO_Port, DIN2_Pin) ? 1 : 0);
+			if (g_dinResources & 0b00001000) g_writer.writeBit(READ_PIN(DIN3_GPIO_Port, DIN3_Pin) ? 1 : 0);
+			if (g_dinResources & 0b00010000) g_writer.writeBit(READ_PIN(DIN4_GPIO_Port, DIN4_Pin) ? 1 : 0);
+			if (g_dinResources & 0b00100000) g_writer.writeBit(READ_PIN(DIN5_GPIO_Port, DIN5_Pin) ? 1 : 0);
+			if (g_dinResources & 0b01000000) g_writer.writeBit(READ_PIN(DIN6_GPIO_Port, DIN6_Pin) ? 1 : 0);
+			if (g_dinResources & 0b10000000) g_writer.writeBit(READ_PIN(DIN7_GPIO_Port, DIN7_Pin) ? 1 : 0);
 
 			if (g_doutResources & 0b00000001) g_writer.writeBit(currentState.doutStates & 0b00000001 ? 1 : 0);
 			if (g_doutResources & 0b00000010) g_writer.writeBit(currentState.doutStates & 0b00000010 ? 1 : 0);
