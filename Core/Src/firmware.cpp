@@ -19,16 +19,6 @@ using namespace eez;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// TODO remove after debugging
-volatile uint32_t g_debugVarCrcError;
-volatile uint32_t g_debugVarOtherError;
-volatile uint32_t g_debugVarDiff;
-volatile uint32_t g_debugVarWriting;
-volatile uint32_t g_debugVarState;
-volatile uint32_t g_debugVarRequestStructSize;
-
-////////////////////////////////////////////////////////////////////////////////
-
 extern "C" SPI_HandleTypeDef hspi2;
 extern "C" SPI_HandleTypeDef hspi3;
 extern "C" SPI_HandleTypeDef hspi4;
@@ -48,6 +38,7 @@ SPI_HandleTypeDef *hspiMaster = &hspi4; // for MASTER-SLAVE communication
 
 extern "C" void TIM2_Init(void);
 extern "C" void TIM3_Init(void);
+extern "C" void SPI4_Init(void);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -108,7 +99,6 @@ struct SetParams {
 	struct {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
-		uint8_t tempSensorBias;
 	} ain[4];
 
 	struct {
@@ -177,12 +167,13 @@ struct Response {
             uint32_t idw0;
             uint32_t idw1;
             uint32_t idw2;
+            uint8_t afeVersion;
         } getInfo;
 
         struct {
             uint8_t flags; // GET_STATE_COMMAND_FLAG_...
             uint8_t dinStates;
-            uint16_t ainValues[4];
+            float ainValues[4];
             DlogState dlogState;
         } getState;
 
@@ -229,7 +220,6 @@ void resetState() {
 	for (int i = 0; i < 4; i++) {
 		currentState.ain[i].mode = 1;
 		currentState.ain[i].range = 0;
-		currentState.ain[i].tempSensorBias = 0;
 	}
 
 	for (int i = 0; i < 2; i++) {
@@ -246,11 +236,6 @@ void resetState() {
 		currentState.pwm[i].freq = 0;
 		currentState.pwm[i].duty = 0;
 	}
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -287,11 +272,11 @@ uint8_t readDataInputs() {
 
 void Din_Setup() {
 	for (int i = 0; i < 8; i++) {
-		HAL_GPIO_WritePin(dinRangePorts[i], dinRangePins[i], GPIO_PIN_RESET);
+		RESET_PIN(dinRangePorts[i], dinRangePins[i]);
 	}
 
 	for (int i = 0; i < 2; i++) {
-		HAL_GPIO_WritePin(dinSpeedPorts[i], dinSpeedPins[i], GPIO_PIN_RESET);
+		RESET_PIN(dinSpeedPorts[i], dinSpeedPins[i]);
 	}
 }
 
@@ -299,14 +284,22 @@ void Din_SetParams(SetParams &newState) {
 	for (int i = 0; i < 8; i++) {
 		int newRange = newState.dinRanges & (1 << i);
 		if (newRange != (currentState.dinRanges & (1 << i))) {
-			HAL_GPIO_WritePin(dinRangePorts[i], dinRangePins[i], newRange ? GPIO_PIN_SET : GPIO_PIN_RESET);
+			if (newRange) {
+				SET_PIN(dinRangePorts[i], dinRangePins[i]);
+			} else {
+				RESET_PIN(dinRangePorts[i], dinRangePins[i]);
+			}
 		}
 	}
 
 	for (int i = 0; i < 2; i++) {
 		int newSpeed = newState.dinSpeeds & (1 << i);
 		if (newSpeed != (currentState.dinSpeeds & (1 << i))) {
-			HAL_GPIO_WritePin(dinSpeedPorts[i], dinSpeedPins[i], newSpeed ? GPIO_PIN_SET : GPIO_PIN_RESET);
+			if (newSpeed) {
+				SET_PIN(dinSpeedPorts[i], dinSpeedPins[i]);
+			} else {
+				RESET_PIN(dinSpeedPorts[i], dinSpeedPins[i]);
+			}
 		}
 	}
 }
@@ -317,54 +310,618 @@ void Din_SetParams(SetParams &newState) {
 static GPIO_TypeDef *doutPort[8] = { DOUT0_GPIO_Port, DOUT1_GPIO_Port, DOUT2_GPIO_Port, DOUT3_GPIO_Port, DOUT4_GPIO_Port, DOUT5_GPIO_Port, DOUT6_GPIO_Port, DOUT7_GPIO_Port };
 static uint16_t doutPin[8] = { DOUT0_Pin, DOUT1_Pin, DOUT2_Pin, DOUT3_Pin, DOUT4_Pin, DOUT5_Pin, DOUT6_Pin, DOUT7_Pin };
 
+void delayMicroseconds(uint32_t microseconds);
+
 void updateDoutStates(uint8_t newDoutStates) {
 	uint8_t currentDoutStates = currentState.doutStates;
 
     if (currentDoutStates == 0 && newDoutStates != 0) {
-    	HAL_GPIO_WritePin(DOUT_EN_GPIO_Port, DOUT_EN_Pin, GPIO_PIN_SET);
+    	SET_PIN(DOUT_EN_GPIO_Port, DOUT_EN_Pin);
     } else if (currentDoutStates != 0 && newDoutStates == 0) {
-    	HAL_GPIO_WritePin(DOUT_EN_GPIO_Port, DOUT_EN_Pin, GPIO_PIN_RESET);
+    	RESET_PIN(DOUT_EN_GPIO_Port, DOUT_EN_Pin);
     }
 
     for (unsigned i = 0; i < 8; i++) {
     	GPIO_PinState oldState = currentDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
     	GPIO_PinState newState = newDoutStates & (1 << i) ? GPIO_PIN_SET : GPIO_PIN_RESET;
     	if (oldState != newState) {
-    		HAL_GPIO_WritePin(doutPort[i], doutPin[i], newState);
+    		if (newState) {
+    			SET_PIN(doutPort[i], doutPin[i]);
+    		} else {
+    			RESET_PIN(doutPort[i], doutPin[i]);
+    		}
+
+//    		SET_PIN(DOUT7_GPIO_Port, DOUT7_Pin);
+//    		delayMicroseconds(1);
+//    		RESET_PIN(DOUT7_GPIO_Port, DOUT7_Pin);
     	}
     }
+}
+
+void Dout_Setup() {
+	currentState.doutStates = 255;
+	updateDoutStates(0);
+	currentState.doutStates = 0;
+}
+
+void Dout_SetParams(SetParams &newState) {
+	updateDoutStates(newState.doutStates);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // ADC (ADS131E04)
 
-uint16_t ADC_samples[4];
+float ADC_samples[4];
 
-void ADC_Setup() {
-	// hspiADC
-#if 0
-	uint8_t buf[10];
-	HAL_SPI_Transmit(hspiADC, buf, 10, 100);
+void delayMicroseconds(uint32_t microseconds) {
+	while (microseconds--) {
+		// 180 NOP's
 
-	SET_PIN(ADC_START_GPIO_Port, ADC_START_Pin);
-	for (int i = 0; i < 10; i++) {}
-	RESET_PIN(ADC_START_GPIO_Port, ADC_START_Pin);
+		// remove 6 NOP's to compensate looping costs
 
-	while (READ_PIN(ADC_DRDY_GPIO_Port, ADC_DRDY_Pin)) {
+		// __ASM volatile ("NOP");
+		// __ASM volatile ("NOP");
+		// __ASM volatile ("NOP");
+		// __ASM volatile ("NOP");
+		// __ASM volatile ("NOP");
+		// __ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
+		__ASM volatile ("NOP");
 	}
+}
 
+// 4 Tclk ~ 2 us
+
+uint8_t ADC_SPI_Transfer(uint8_t data) {
+	while(!(SPI3->SR & SPI_SR_TXE))
+		;
+
+	*(volatile uint8_t *)&SPI3->DR = data;
+
+	while(!(SPI3->SR & SPI_SR_RXNE))
+		;
+
+	return *(volatile uint8_t *)&SPI3->DR;
+}
+
+#define SPI_IS_BUSY(SPIx)  (((SPIx)->SR & (SPI_SR_TXE | SPI_SR_RXNE)) == 0 || ((SPIx)->SR & SPI_SR_BSY))
+#define SPI_WAIT(SPIx)     while (SPI_IS_BUSY(SPIx))
+#define SPI1_DR_8bit(SPIx) (*(__IO uint8_t *)((uint32_t)&(SPIx->DR)))
+
+uint8_t ADC_SPI_TransferV2(uint8_t data){
+	SPI_WAIT(SPI3);
+	SPI1_DR_8bit(SPI3) = data;
+	SPI_WAIT(SPI3);
+	return SPI1_DR_8bit(SPI3);
+
+}
+
+void ADC_WriteReg(uint8_t reg, uint8_t val) {
 	// select ADC
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t cmd[2];
+
+	cmd[0] = ( reg & 0b0001'1111 ) | 0b0100'0000;
+	cmd[1] = 1; // write 1 register
+
+	//ADC_SPI_Transfer(cmd[0]);
+	//ADC_SPI_Transfer(cmd[1]);
+	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
+
+	delayMicroseconds(2);
+
+	// val = ADC_SPI_Transfer(0);
+	HAL_SPI_Transmit(hspiADC, &val, 1, 100);
 
 	// deselect ADC
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
-#endif
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+}
+
+uint8_t ADC_ReadReg(uint8_t reg) {
+	// select ADC
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t cmd[2];
+	cmd[0] = ( reg & 0b0001'1111 ) | 0b0010'0000;
+	cmd[1] = 1; // read 1 register
+
+	// ADC_SPI_Transfer(cmd[0]);
+	// ADC_SPI_Transfer(cmd[1]);
+	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
+
+	delayMicroseconds(2);
+
+	uint8_t value;
+	// value = ADC_SPI_Transfer(0);
+	HAL_SPI_Receive(hspiADC, &value, 1, 100);
+
+	// deselect ADC
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	return value;
+}
+
+void ADC_SwReset() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x06;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	delayMicroseconds(10);
+}
+
+void ADC_WakeUp() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x02;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+}
+
+void ADC_StopReadContinuous() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x11;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+}
+
+void ADC_OffsetCalc() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x1A;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	HAL_Delay(153);
+}
+
+void ADC_Start() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x08;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+}
+
+void ADC_Stop() {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t tx = 0x0A;
+	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
+
+	delayMicroseconds(2);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+}
+
+void ADC_Pin_SetState(int pinIndex, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, bool pinState) {
+	static int ADC_Pin_CurrentState[16] = {
+		// undefined
+		-1, -1, -1, -1,
+		-1, -1, -1, -1,
+		-1, -1, -1, -1,
+		-1, -1, -1, -1
+	};
+
+	int state = pinState ? 1 : 0;
+
+	if (ADC_Pin_CurrentState[pinIndex] != state) {
+		if (state) {
+			SET_PIN(GPIOx, GPIO_Pin);
+		} else {
+			RESET_PIN(GPIOx, GPIO_Pin);
+		}
+		ADC_Pin_CurrentState[pinIndex] = state;
+	}
+}
+
+void ADC_Relay_SetState(
+	int relayIndex,
+	GPIO_TypeDef* GPIOx_Set, uint16_t GPIO_Pin_Set,
+	GPIO_TypeDef* GPIOx_Reset, uint16_t GPIO_Pin_Reset,
+	bool relayState
+) {
+	static int ADC_Relay_CurrentState[4] = {
+		// undefined
+		-1, -1, -1, -1
+	};
+
+	int state = relayState ? 1 : 0;
+
+	if (ADC_Relay_CurrentState[relayIndex] != state) {
+		if (state) {
+			SET_PIN(GPIOx_Set, GPIO_Pin_Set);
+			HAL_Delay(40);
+			RESET_PIN(GPIOx_Set, GPIO_Pin_Set);
+		} else {
+			SET_PIN(GPIOx_Reset, GPIO_Pin_Reset);
+			HAL_Delay(40);
+			RESET_PIN(GPIOx_Reset, GPIO_Pin_Reset);
+		}
+
+		ADC_Relay_CurrentState[relayIndex] = state;
+	}
+}
+
+uint8_t ADC_pga[4];
+
+void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
+	uint8_t pga = 0b0001'0000;
+
+	if (channelIndex == 2 || channelIndex == 3) {
+		if (mode == SOURCE_MODE_CURRENT) {
+			if (range == 0) {
+				pga = 0b0010'0000; // x2
+			} else if (range == 1) {
+				pga = 0b0100'0000; // x4
+			} else {
+				pga = 0b0110'0000; // x12
+			}
+		}
+	}
+
+	ADC_pga[channelIndex] = pga;
+
+	if (mode == SOURCE_MODE_OPEN) {
+		ADC_WriteReg(0x05 + channelIndex, 0b1000'0000);
+	} else {
+		ADC_WriteReg(0x05 + channelIndex, 0b0000'0000 | pga);
+	}
+
+	if (channelIndex == 0) {
+		ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(1, USEL10_1_GPIO_Port, USEL10_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 2);
+		ADC_Pin_SetState(3, ISEL_1_GPIO_Port, ISEL_1_Pin, mode == SOURCE_MODE_CURRENT);
+	} else if (channelIndex == 1) {
+		ADC_Pin_SetState(4, USEL1_2_GPIO_Port, USEL1_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(5, USEL10_2_GPIO_Port, USEL10_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(6, USEL100_2_GPIO_Port, USEL100_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 2);
+		ADC_Pin_SetState(7, ISEL_2_GPIO_Port, ISEL_2_Pin, mode == SOURCE_MODE_CURRENT);
+	} else if (channelIndex == 2) {
+		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
+		// Current 1A   : ISEL_MID, ISEL10A, ISEL
+		// Current 10A  : ISEL_MID
+
+		ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(9, USEL10_3_GPIO_Port, USEL10_3_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, mode == SOURCE_MODE_CURRENT && range == 0);
+		ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, mode == SOURCE_MODE_CURRENT && (range == 1 || range == 2));
+
+		ADC_Relay_SetState(0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin,
+			mode == SOURCE_MODE_VOLTAGE || (mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1)));
+
+		ADC_Relay_SetState(1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin,
+			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
+	} else {
+		ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(13, USEL10_4_GPIO_Port, USEL10_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, mode == SOURCE_MODE_CURRENT && range == 0);
+		ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, mode == SOURCE_MODE_CURRENT && (range == 1 || range == 2));
+
+		ADC_Relay_SetState(2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin,
+			mode == SOURCE_MODE_VOLTAGE || (mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1)));
+
+		ADC_Relay_SetState(3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin,
+			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
+	}
+}
+
+void ADC_Setup() {
+	ADC_SwReset();
+	ADC_WakeUp();
+	ADC_StopReadContinuous();
+
+	ADC_WriteReg(0x01, 0b1111'0110); // CONFIG1  24-bit 16 KSPS
+	ADC_WriteReg(0x02, 0b1111'0101); // CONFIG2
+	ADC_WriteReg(0x03, 0b1100'0000); // CONFIG3
+
+	ADC_WriteReg(0x04, 0b0000'0000); // FAULT
+
+	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+		ADC_UpdateChannel(
+			channelIndex,
+			currentState.ain[channelIndex].mode,
+			currentState.ain[channelIndex].range
+		);
+	}
+
+	ADC_OffsetCalc();
+
+	ADC_Start();
 }
 
 void ADC_SetParams(SetParams &newState) {
+	uint8_t ADC_pga_before[4] = {
+		ADC_pga[0],
+		ADC_pga[1],
+		ADC_pga[2],
+		ADC_pga[3]
+	};
+
+	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+		if (
+			newState.ain[channelIndex].mode != currentState.ain[channelIndex].mode ||
+			newState.ain[channelIndex].range != currentState.ain[channelIndex].range
+		) {
+			ADC_UpdateChannel(
+				channelIndex,
+				newState.ain[channelIndex].mode,
+				newState.ain[channelIndex].range
+			);
+		}
+	}
+
+	if (
+		ADC_pga_before[0] != ADC_pga[0] ||
+		ADC_pga_before[1] != ADC_pga[1] ||
+		ADC_pga_before[2] != ADC_pga[2] ||
+		ADC_pga_before[3] != ADC_pga[3]
+	) {
+		ADC_OffsetCalc();
+	}
 }
 
+volatile bool g_drdy;
+
 void ADC_Measure() {
+	if (g_drdy) {
+		g_drdy = false;
+
+		RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+		ADC_SPI_TransferV2(0x12);
+
+		uint8_t rx[15];
+		for (int i = 0; i < 15; i++) {
+			rx[i] = ADC_SPI_TransferV2(0);
+		}
+
+		delayMicroseconds(2);
+		SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+		// status
+		// uint32_t status = (rx[0] << 16) | (rx[1] << 8) | rx[2];
+
+		int32_t ch[4];
+
+		ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
+		ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
+		ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
+		ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
+
+		for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+			double f;
+
+			if (channelIndex < 2) {
+				if (currentState.ain[channelIndex].mode == SOURCE_MODE_VOLTAGE) {
+					if (currentState.ain[channelIndex].range == 0) {
+						f = 2.4; // +/- 2.4 V
+					} else if (currentState.ain[0].range == 1) {
+						f = 48.0; // +/- 48 V
+					} else {
+						f = 240.0; // +/- 240 V
+					}
+				} else if (currentState.ain[channelIndex].mode == SOURCE_MODE_CURRENT) {
+					f = 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
+				} else {
+					f = 0;
+				}
+			} else {
+				if (currentState.ain[channelIndex].mode == SOURCE_MODE_VOLTAGE) {
+					if (currentState.ain[channelIndex].range == 0) {
+						f = 2.4; // +/- 2.4 V
+					} else {
+						f = 12.0; // +/- 12 V
+					}
+				} else if (currentState.ain[channelIndex].mode == SOURCE_MODE_CURRENT) {
+					if (currentState.ain[channelIndex].range == 0) {
+						f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
+					} else if (currentState.ain[channelIndex].range == 1) {
+						f = 1.2; // +/- 1 A (rsense 0.5 ohm, PGA is 4)
+					} else {
+						f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
+					}
+				} else {
+					f = 0;
+				}
+			}
+
+			ADC_samples[channelIndex] = (float)(f * ch[channelIndex] / (1 << 23));
+		}
+	}
+}
+
+extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == ADC_DRDY_Pin) {
+		g_drdy = true;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -380,11 +937,11 @@ void DAC_SpiWrite(int i, uint8_t b0, uint8_t b1, uint8_t b2) {
     HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
 
     if (i == 0) {
-    	HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_SET);
-    	HAL_GPIO_WritePin(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin, GPIO_PIN_RESET);
+    	SET_PIN(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin);
+    	RESET_PIN(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin);
     } else {
-        HAL_GPIO_WritePin(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin, GPIO_PIN_RESET);
+        SET_PIN(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin);
+        RESET_PIN(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin);
     }
 }
 
@@ -462,9 +1019,9 @@ void DAC_SetParams(int i, SetParams &newState) {
 
 void DACDual_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
     uint8_t buf[3] = { b0, b1, b2 };
-    HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_RESET);
+    RESET_PIN(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin);
     HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
-    HAL_GPIO_WritePin(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin, GPIO_PIN_SET);
+    SET_PIN(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin);
 }
 
 void DACDual_Setup() {
@@ -503,7 +1060,7 @@ void DACDual_SetParams(int i, SetParams &newState) {
 // PWM outputs
 
 void PWM_Setup() {
-	HAL_GPIO_WritePin(DOUT_EN_GPIO_Port, DOUT_EN_Pin, GPIO_PIN_SET);
+	SET_PIN(DOUT_EN_GPIO_Port, DOUT_EN_Pin);
 }
 
 void PWM_SetParams(int i, SetParams &newState) {
@@ -716,18 +1273,12 @@ uint32_t DLOG_WriteFile(bool flush = false) {
 				nInvalid = n;
 			}
 
-			// TODO remove after debugging
-			g_debugVarDiff = nInvalid;
-
 			// invalid samples
 			memset(g_fileWriteBuffer + g_fileWriteBufferIndex, 0, nInvalid);
 			g_fileWriteBufferIndex += nInvalid;
 			g_lastSavedBufferIndex += nInvalid;
 
 			n -= nInvalid;
-		} else {
-			// TODO remove after debugging
-			g_debugVarDiff = 0;
 		}
 
 		if (n > 0) {
@@ -741,10 +1292,8 @@ uint32_t DLOG_WriteFile(bool flush = false) {
 
 	if (g_fileWriteBufferIndex == sizeof(g_fileWriteBuffer) || flush) {
 		UINT btw = g_fileWriteBufferIndex;
-		g_debugVarWriting = btw;
 		UINT bw;
 		FRESULT result = f_write(&g_file, g_fileWriteBuffer, btw, &bw);
-		g_debugVarWriting = 0;
 
 		if (result != FR_OK) {
 			goto Exit;
@@ -837,7 +1386,7 @@ volatile int transferCompleted;
 void beginTransfer() {
     transferCompleted = 0;
     HAL_SPI_TransmitReceive_DMA(hspiMaster, (uint8_t *)output, (uint8_t *)input, sizeof(Request));
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_RESET);
+    RESET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 }
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
@@ -845,10 +1394,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 		return;
 	}
 
-	g_debugVarCrcError = 0;
-	g_debugVarOtherError = 0;
-
-	HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+	SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 	transferCompleted = 1;
 }
 
@@ -857,30 +1403,23 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 		return;
 	}
 
-	// TODO remove after debugging
-	if (hspi->ErrorCode == HAL_SPI_ERROR_CRC) {
-		g_debugVarCrcError++;
-	} else {
-		g_debugVarOtherError++;
-	}
-
-    HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+    SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 	transferCompleted = 2;
 }
 
 int waitTransferCompletion() {
 	uint32_t startTick = HAL_GetTick();
 	while (!transferCompleted) {
+		ADC_Measure();
+
 		if (HAL_GetTick() - startTick > 500) {
-			g_debugVarState = 1;
 			HAL_SPI_Abort(hspiMaster);
-			HAL_GPIO_WritePin(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin, GPIO_PIN_SET);
+			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 			return 2;
 		}
 
 		DLOG_LoopWrite();
 	}
-	g_debugVarState = 2;
 	return transferCompleted;
 }
 
@@ -892,6 +1431,7 @@ void Command_GetInfo(Request &request, Response &response) {
 	response.getInfo.idw0 = HAL_GetUIDw0();
 	response.getInfo.idw1 = HAL_GetUIDw1();
 	response.getInfo.idw2 = HAL_GetUIDw2();
+	response.getInfo.afeVersion = ((READ_PIN(AFE_ID1_GPIO_Port, AFE_ID1_Pin) << 1) | READ_PIN(AFE_ID0_GPIO_Port, AFE_ID0_Pin)) + 1;
 }
 
 void Command_GetState(Request &request, Response &response) {
@@ -904,8 +1444,6 @@ void Command_GetState(Request &request, Response &response) {
 
 	response.getState.dinStates = readDataInputs();
 
-	ADC_Measure();
-
 	response.getState.ainValues[0] = ADC_samples[0];
 	response.getState.ainValues[1] = ADC_samples[1];
 	response.getState.ainValues[2] = ADC_samples[2];
@@ -916,6 +1454,7 @@ void Command_GetState(Request &request, Response &response) {
 
 void Command_SetParams(Request &request, Response &response) {
 	Din_SetParams(request.setParams);
+	Dout_SetParams(request.setParams);
 	ADC_SetParams(request.setParams);
 	DAC_SetParams(0, request.setParams);
 	DAC_SetParams(1, request.setParams);
@@ -987,11 +1526,10 @@ void Command_DiskDriveIoctl(Request &request, Response &response) {
 // Setup & Loop
 
 extern "C" void setup() {
-	g_debugVarRequestStructSize = sizeof(Request);
-
 	resetState();
 
 	Din_Setup();
+	Dout_Setup();
 	ADC_Setup();
 	DAC_Setup(0);
     DAC_Setup(1);
@@ -1000,18 +1538,14 @@ extern "C" void setup() {
 }
 
 extern "C" void loop() {
-	g_debugVarState = 0;
 	beginTransfer();
 
     auto transferResult = waitTransferCompletion();
-
-	g_debugVarState = 3;
 
     Request &request = *(Request *)input;
     Response &response = *(Response *)output;
 
     if (transferResult == 1) {
-    	g_debugVarState = 4;
     	response.command = 0x80 | request.command;
 
     	if (request.command == COMMAND_GET_INFO) {
@@ -1035,12 +1569,15 @@ extern "C" void loop() {
 		} else if (request.command == COMMAND_DISK_DRIVE_IOCTL) {
 			Command_DiskDriveIoctl(request, response);
 		} else {
-    		g_debugVarState = 5;
 	    	response.command = COMMAND_NONE;
 		}
     } else {
-    	g_debugVarState = 6;
     	response.command = COMMAND_NONE;
-    	HAL_Delay(1);
+
+    	while (!READ_PIN(DIB_NSS_GPIO_Port, DIB_NSS_Pin)) {
+    	}
+
+		HAL_SPI_DeInit(hspiMaster);
+		SPI4_Init();
     }
 }
