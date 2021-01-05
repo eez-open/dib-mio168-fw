@@ -11,6 +11,14 @@
 
 using namespace eez;
 
+#define DEBUG_VARS 1
+
+#if DEBUG_VARS
+volatile uint32_t g_debugVar1;
+volatile uint32_t g_debugVar2;
+volatile uint32_t g_debugVar3;
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 
 #define READ_PIN(PORT, PIN) ((PORT->IDR & PIN) ? 1 : 0)
@@ -239,7 +247,12 @@ void resetState() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Digital Inputs
+////////////////////////////////////////////////////////////////////////////////
+//
+//        Digital Inputs
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 GPIO_TypeDef* dinRangePorts[8] = {
 	IN_CTRL0_GPIO_Port, IN_CTRL1_GPIO_Port, IN_CTRL2_GPIO_Port, IN_CTRL3_GPIO_Port,
@@ -305,7 +318,12 @@ void Din_SetParams(SetParams &newState) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Digital Outputs
+////////////////////////////////////////////////////////////////////////////////
+//
+//        Digital Outputs
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 static GPIO_TypeDef *doutPort[8] = { DOUT0_GPIO_Port, DOUT1_GPIO_Port, DOUT2_GPIO_Port, DOUT3_GPIO_Port, DOUT4_GPIO_Port, DOUT5_GPIO_Port, DOUT6_GPIO_Port, DOUT7_GPIO_Port };
 static uint16_t doutPin[8] = { DOUT0_Pin, DOUT1_Pin, DOUT2_Pin, DOUT3_Pin, DOUT4_Pin, DOUT5_Pin, DOUT6_Pin, DOUT7_Pin };
@@ -349,9 +367,56 @@ void Dout_SetParams(SetParams &newState) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ADC (ADS131E04)
+////////////////////////////////////////////////////////////////////////////////
+//
+//        ADC (ADS131E04)
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, typename Total, uint64_t N>
+class MovingAverage {
+public:
+    void operator()(T sample) {
+        if (m_numSamples < N) {
+            m_samples[m_numSamples++] = sample;
+            m_total += sample;
+        } else {
+            T& oldest = m_samples[m_numSamples++ % N];
+			m_total += sample - oldest;
+            oldest = sample;
+        }
+    }
+
+    operator T() const {
+		if (m_numSamples < N) {
+			return m_total / m_numSamples;
+		} else {
+			return m_total / N;
+		}
+    }
+
+    void reset() {
+        m_numSamples = 0;
+        m_total = 0;
+    }
+
+private:
+    T m_samples[N];
+    uint64_t m_numSamples{0};
+    Total m_total{0};
+};
 
 float ADC_samples[4];
+
+static const uint64_t ADC_MOVING_AVERAGE_NUM_SAMPLES = 500;
+MovingAverage<float, double, ADC_MOVING_AVERAGE_NUM_SAMPLES> g_adcMovingAverage[4];
+
+uint8_t ADC_pga[4];
+
+double ADC_factor[4];
+
+volatile bool ADC_stopped;
 
 void delayMicroseconds(uint32_t microseconds) {
 	while (microseconds--) {
@@ -542,142 +607,80 @@ void delayMicroseconds(uint32_t microseconds) {
 	}
 }
 
-// 4 Tclk ~ 2 us
-
-uint8_t ADC_SPI_Transfer(uint8_t data) {
-	while(!(SPI3->SR & SPI_SR_TXE))
-		;
-
-	*(volatile uint8_t *)&SPI3->DR = data;
-
-	while(!(SPI3->SR & SPI_SR_RXNE))
-		;
-
-	return *(volatile uint8_t *)&SPI3->DR;
-}
+#define ADC_SPI_SELECT() RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
+#define ADC_SPI_DESELECT() delayMicroseconds(1); SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
+//#define ADC_SPI_SELECT() (void)0
+//#define ADC_SPI_DESELECT() (void)0
 
 #define SPI_IS_BUSY(SPIx)  (((SPIx)->SR & (SPI_SR_TXE | SPI_SR_RXNE)) == 0 || ((SPIx)->SR & SPI_SR_BSY))
 #define SPI_WAIT(SPIx)     while (SPI_IS_BUSY(SPIx))
 #define SPI1_DR_8bit(SPIx) (*(__IO uint8_t *)((uint32_t)&(SPIx->DR)))
 
-uint8_t ADC_SPI_TransferV2(uint8_t data){
+uint8_t ADC_SPI_TransferLL(uint8_t data){
 	SPI_WAIT(SPI3);
 	SPI1_DR_8bit(SPI3) = data;
 	SPI_WAIT(SPI3);
 	return SPI1_DR_8bit(SPI3);
-
 }
 
 void ADC_WriteReg(uint8_t reg, uint8_t val) {
-	// select ADC
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
 	uint8_t cmd[2];
-
 	cmd[0] = ( reg & 0b0001'1111 ) | 0b0100'0000;
 	cmd[1] = 1; // write 1 register
 
-	//ADC_SPI_Transfer(cmd[0]);
-	//ADC_SPI_Transfer(cmd[1]);
+	ADC_SPI_SELECT();
 	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
-
 	delayMicroseconds(2);
-
-	// val = ADC_SPI_Transfer(0);
 	HAL_SPI_Transmit(hspiADC, &val, 1, 100);
-
-	// deselect ADC
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	ADC_SPI_DESELECT();
 }
 
 uint8_t ADC_ReadReg(uint8_t reg) {
-	// select ADC
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
 	uint8_t cmd[2];
 	cmd[0] = ( reg & 0b0001'1111 ) | 0b0010'0000;
 	cmd[1] = 1; // read 1 register
 
-	// ADC_SPI_Transfer(cmd[0]);
-	// ADC_SPI_Transfer(cmd[1]);
-	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
-
-	delayMicroseconds(2);
-
 	uint8_t value;
-	// value = ADC_SPI_Transfer(0);
-	HAL_SPI_Receive(hspiADC, &value, 1, 100);
 
-	// deselect ADC
+	ADC_SPI_SELECT();
+	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
 	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	HAL_SPI_Receive(hspiADC, &value, 1, 100);
+	ADC_SPI_DESELECT();
 
 	return value;
 }
 
+void ADC_SendSimpleCmd(uint8_t cmd) {
+	ADC_SPI_SELECT();
+	HAL_SPI_Transmit(hspiADC, &cmd, 1, 100);
+	ADC_SPI_DESELECT();
+}
+
 void ADC_SwReset() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x06;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
+	ADC_SendSimpleCmd(0x06);
 	delayMicroseconds(10);
 }
 
 void ADC_WakeUp() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x02;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	ADC_SendSimpleCmd(0x02);
 }
 
 void ADC_StopReadContinuous() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x11;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	ADC_SendSimpleCmd(0x11);
 }
 
 void ADC_OffsetCalc() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x1A;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
+	ADC_SendSimpleCmd(0x1A);
 	HAL_Delay(153);
 }
 
 void ADC_Start() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x08;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	ADC_SendSimpleCmd(0x08);
 }
 
 void ADC_Stop() {
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	uint8_t tx = 0x0A;
-	HAL_SPI_Transmit(hspiADC, &tx, 1, 100);
-
-	delayMicroseconds(2);
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	ADC_SendSimpleCmd(0x0A);
 }
 
 void ADC_Pin_SetState(int pinIndex, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, bool pinState) {
@@ -729,8 +732,6 @@ void ADC_Relay_SetState(
 	}
 }
 
-uint8_t ADC_pga[4];
-
 void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 	uint8_t pga = 0b0001'0000;
 
@@ -780,6 +781,10 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 		ADC_Relay_SetState(1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin,
 			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
 	} else {
+		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
+		// Current 1A   : ISEL_MID, ISEL10A, ISEL
+		// Current 10A  : ISEL_MID
+
 		ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
 		ADC_Pin_SetState(13, USEL10_4_GPIO_Port, USEL10_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
 		ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, mode == SOURCE_MODE_CURRENT && range == 0);
@@ -791,6 +796,47 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 		ADC_Relay_SetState(3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin,
 			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
 	}
+
+	//
+	double f;
+
+	if (channelIndex < 2) {
+		if (mode == SOURCE_MODE_VOLTAGE) {
+			if (range == 0) {
+				f = 2.4; // +/- 2.4 V
+			} else if (range == 1) {
+				f = 48.0; // +/- 48 V
+			} else {
+				f = 240.0; // +/- 240 V
+			}
+		} else if (mode == SOURCE_MODE_CURRENT) {
+			f = 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
+		} else {
+			f = 0;
+		}
+	} else {
+		if (mode == SOURCE_MODE_VOLTAGE) {
+			if (range == 0) {
+				f = 2.4; // +/- 2.4 V
+			} else {
+				f = 12.0; // +/- 12 V
+			}
+		} else if (mode == SOURCE_MODE_CURRENT) {
+			if (range == 0) {
+				f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
+			} else if (range == 1) {
+				f = 1.2; // +/- 1 A (rsense 0.5 ohm, PGA is 4)
+			} else {
+				f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
+			}
+		} else {
+			f = 0;
+		}
+	}
+
+	ADC_factor[channelIndex] = f;
+
+	g_adcMovingAverage[channelIndex].reset();
 }
 
 void ADC_Setup() {
@@ -830,6 +876,12 @@ void ADC_SetParams(SetParams &newState) {
 			newState.ain[channelIndex].mode != currentState.ain[channelIndex].mode ||
 			newState.ain[channelIndex].range != currentState.ain[channelIndex].range
 		) {
+			if (!ADC_stopped) {
+				ADC_stopped = true;
+				ADC_Stop();
+				HAL_Delay(2);
+			}
+
 			ADC_UpdateChannel(
 				channelIndex,
 				newState.ain[channelIndex].mode,
@@ -846,86 +898,68 @@ void ADC_SetParams(SetParams &newState) {
 	) {
 		ADC_OffsetCalc();
 	}
+
+	if (ADC_stopped) {
+		HAL_Delay(2);
+		ADC_Start();
+		ADC_stopped = false;
+	}
 }
 
-volatile bool g_drdy;
+inline void ADC_Measure() {
+	ADC_SPI_SELECT();
 
-void ADC_Measure() {
-	if (g_drdy) {
-		g_drdy = false;
+	ADC_SPI_TransferLL(0x12);
 
-		RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-		ADC_SPI_TransferV2(0x12);
-
-		uint8_t rx[15];
-		for (int i = 0; i < 15; i++) {
-			rx[i] = ADC_SPI_TransferV2(0);
-		}
-
-		delayMicroseconds(2);
-		SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-		// status
-		// uint32_t status = (rx[0] << 16) | (rx[1] << 8) | rx[2];
-
-		int32_t ch[4];
-
-		ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
-		ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
-		ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
-		ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
-
-		for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-			double f;
-
-			if (channelIndex < 2) {
-				if (currentState.ain[channelIndex].mode == SOURCE_MODE_VOLTAGE) {
-					if (currentState.ain[channelIndex].range == 0) {
-						f = 2.4; // +/- 2.4 V
-					} else if (currentState.ain[0].range == 1) {
-						f = 48.0; // +/- 48 V
-					} else {
-						f = 240.0; // +/- 240 V
-					}
-				} else if (currentState.ain[channelIndex].mode == SOURCE_MODE_CURRENT) {
-					f = 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
-				} else {
-					f = 0;
-				}
-			} else {
-				if (currentState.ain[channelIndex].mode == SOURCE_MODE_VOLTAGE) {
-					if (currentState.ain[channelIndex].range == 0) {
-						f = 2.4; // +/- 2.4 V
-					} else {
-						f = 12.0; // +/- 12 V
-					}
-				} else if (currentState.ain[channelIndex].mode == SOURCE_MODE_CURRENT) {
-					if (currentState.ain[channelIndex].range == 0) {
-						f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
-					} else if (currentState.ain[channelIndex].range == 1) {
-						f = 1.2; // +/- 1 A (rsense 0.5 ohm, PGA is 4)
-					} else {
-						f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
-					}
-				} else {
-					f = 0;
-				}
-			}
-
-			ADC_samples[channelIndex] = (float)(f * ch[channelIndex] / (1 << 23));
-		}
+	uint8_t rx[15];
+	for (int i = 0; i < 15; i++) {
+		rx[i] = ADC_SPI_TransferLL(0);
 	}
+
+	ADC_SPI_DESELECT();
+
+	// status
+	// uint32_t status = (rx[0] << 16) | (rx[1] << 8) | rx[2];
+
+	int32_t ch[4];
+
+	ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
+	ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
+	ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
+	ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
+
+	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+		double f = ADC_factor[channelIndex];
+		float value = (float)(f * ch[channelIndex] / (1 << 23));
+		g_adcMovingAverage[channelIndex](value);
+		ADC_samples[channelIndex] = g_adcMovingAverage[channelIndex];
+	}
+
+#if DEBUG_VARS
+	if (++g_debugVar1 == ADC_MOVING_AVERAGE_NUM_SAMPLES) {
+		g_debugVar1 = 0;
+		uint32_t tickCount = HAL_GetTick();
+		g_debugVar2 = tickCount - g_debugVar3;
+		g_debugVar3 = tickCount;
+	}
+#endif
 }
 
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ADC_DRDY_Pin) {
-		g_drdy = true;
+		if (!ADC_stopped) {
+			ADC_Measure();
+		}
 	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// DAC7760
+////////////////////////////////////////////////////////////////////////////////
+//
+//        DAC7760
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 #define DAC7760_CONTROL_REGISTER 0x55
 #define DAC7760_CONFIGURATION_REGISTER 0x57
@@ -1015,7 +1049,12 @@ void DAC_SetParams(int i, SetParams &newState) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// DAC7563
+////////////////////////////////////////////////////////////////////////////////
+//
+//        DAC7563
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void DACDual_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
     uint8_t buf[3] = { b0, b1, b2 };
@@ -1025,6 +1064,8 @@ void DACDual_SpiWrite(uint8_t b0, uint8_t b1, uint8_t b2) {
 }
 
 void DACDual_Setup() {
+	SET_PIN(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin);
+
     // Enable internal reference
 	DACDual_SpiWrite(0b00111000, 0x00, 0x01);
 
@@ -1057,7 +1098,12 @@ void DACDual_SetParams(int i, SetParams &newState) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// PWM outputs
+////////////////////////////////////////////////////////////////////////////////
+//
+//        PWM outputs
+//
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void PWM_Setup() {
 	SET_PIN(DOUT_EN_GPIO_Port, DOUT_EN_Pin);
@@ -1114,10 +1160,10 @@ DlogState dlogState;
 uint8_t g_dinResources;
 uint8_t g_doutResources;
 
-uint8_t g_writerBuffer[64 * 1024];
+uint8_t g_writerBuffer[48 * 1024];
 dlog_file::Writer g_writer(g_writerBuffer, sizeof(g_writerBuffer));
 
-uint8_t g_fileWriteBuffer[32 * 1024];
+uint8_t g_fileWriteBuffer[24 * 1024];
 uint32_t g_fileWriteBufferIndex;
 
 uint32_t g_numSamples;
@@ -1410,8 +1456,6 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 int waitTransferCompletion() {
 	uint32_t startTick = HAL_GetTick();
 	while (!transferCompleted) {
-		ADC_Measure();
-
 		if (HAL_GetTick() - startTick > 500) {
 			HAL_SPI_Abort(hspiMaster);
 			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);

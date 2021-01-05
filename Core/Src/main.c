@@ -691,25 +691,24 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, USEL1_2_Pin|USEL10_2_Pin|USEL100_2_Pin|ISEL_S_4_Pin
-                          |ISEL_R_4_Pin|ISEL10_R_4_Pin|DAC_CS_1_Pin|DAC_CLR_1_Pin
-                          |DAC_CS_2_Pin|DAC_CLR_2_Pin, GPIO_PIN_RESET);
+                          |ISEL_R_4_Pin|ISEL10_R_4_Pin|DAC_CLR_1_Pin|DAC_CLR_2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, DOUT0_Pin|DOUT1_Pin|DOUT2_Pin|DOUT3_Pin
                           |DOUT_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|DAC_CS_DUAL_Pin|ADC_START_Pin
-                          |SLOW_DIN_1_Pin|SLOW_DIN_0_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|ADC_START_Pin|SLOW_DIN_1_Pin
+                          |SLOW_DIN_0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DAC_CLR_SEL_1_GPIO_Port, DAC_CLR_SEL_1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOF, DAC_CS_1_Pin|DAC_CLR_SEL_1_Pin|DAC_CS_2_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BIAS_EN_GPIO_Port, BIAS_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DIB_IRQ_Pin|ADC_CLK_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, DIB_IRQ_Pin|DAC_CS_DUAL_Pin|ADC_CLK_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOG, IN_CTRL7_Pin|IN_CTRL6_Pin|IN_CTRL5_Pin|IN_CTRL4_Pin
