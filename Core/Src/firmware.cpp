@@ -17,6 +17,7 @@ using namespace eez;
 volatile uint32_t g_debugVar1;
 volatile uint32_t g_debugVar2;
 volatile uint32_t g_debugVar3;
+volatile uint16_t g_debugVar4;
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -56,8 +57,7 @@ DWORD g_fatTime;
 
 enum SourceMode {
 	SOURCE_MODE_CURRENT,
-	SOURCE_MODE_VOLTAGE,
-	SOURCE_MODE_OPEN
+	SOURCE_MODE_VOLTAGE
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -182,6 +182,7 @@ struct Response {
             uint8_t flags; // GET_STATE_COMMAND_FLAG_...
             uint8_t dinStates;
             float ainValues[4];
+            uint16_t ainFaultStatus;
             DlogState dlogState;
         } getState;
 
@@ -408,6 +409,7 @@ private:
 };
 
 float ADC_samples[4];
+uint16_t ADC_faultStatus;
 
 static const uint64_t ADC_MOVING_AVERAGE_NUM_SAMPLES = 500;
 MovingAverage<float, double, ADC_MOVING_AVERAGE_NUM_SAMPLES> g_adcMovingAverage[4];
@@ -749,11 +751,7 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 
 	ADC_pga[channelIndex] = pga;
 
-	if (mode == SOURCE_MODE_OPEN) {
-		ADC_WriteReg(0x05 + channelIndex, 0b1000'0000);
-	} else {
-		ADC_WriteReg(0x05 + channelIndex, 0b0000'0000 | pga);
-	}
+	ADC_WriteReg(0x05 + channelIndex, 0b0000'0000 | pga);
 
 	if (channelIndex == 0) {
 		ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
@@ -825,7 +823,7 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 			if (range == 0) {
 				f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
 			} else if (range == 1) {
-				f = 1.2; // +/- 1 A (rsense 0.5 ohm, PGA is 4)
+				f = 1.2; // +/- 1.2 A (rsense 0.5 ohm, PGA is 4)
 			} else {
 				f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
 			}
@@ -906,6 +904,10 @@ void ADC_SetParams(SetParams &newState) {
 	}
 }
 
+//
+// No DMA version
+//
+
 inline void ADC_Measure() {
 	ADC_SPI_SELECT();
 
@@ -918,8 +920,7 @@ inline void ADC_Measure() {
 
 	ADC_SPI_DESELECT();
 
-	// status
-	// uint32_t status = (rx[0] << 16) | (rx[1] << 8) | rx[2];
+	ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
 
 	int32_t ch[4];
 
@@ -942,6 +943,59 @@ inline void ADC_Measure() {
 		g_debugVar2 = tickCount - g_debugVar3;
 		g_debugVar3 = tickCount;
 	}
+	g_debugVar4 = ADC_faultStatus;
+#endif
+}
+
+//
+// DMA version
+//
+
+uint8_t ADX_rx[16];
+
+inline void ADC_Measure_Start() {
+	uint8_t ADC_tx[16] = {
+		0x12, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00
+	};
+
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADX_rx, 16);
+}
+
+inline void ADC_Measure_Finish(bool ok) {
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	if (ok && !ADC_stopped) {
+		uint8_t *rx = ADX_rx + 1;
+
+		// status
+		// uint32_t status = (rx[0] << 16) | (rx[1] << 8) | rx[2];
+
+		int32_t ch[4];
+
+		ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
+		ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
+		ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
+		ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
+
+		for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+			double f = ADC_factor[channelIndex];
+			float value = (float)(f * ch[channelIndex] / (1 << 23));
+			g_adcMovingAverage[channelIndex](value);
+			ADC_samples[channelIndex] = g_adcMovingAverage[channelIndex];
+		}
+	}
+
+#if DEBUG_VARS
+	if (++g_debugVar1 == ADC_MOVING_AVERAGE_NUM_SAMPLES) {
+		g_debugVar1 = 0;
+		uint32_t tickCount = HAL_GetTick();
+		g_debugVar2 = tickCount - g_debugVar3;
+		g_debugVar3 = tickCount;
+	}
 #endif
 }
 
@@ -950,6 +1004,9 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 		if (!ADC_stopped) {
 			ADC_Measure();
 		}
+
+		// DMA version
+		// ADC_Measure_Start();
 	}
 }
 
@@ -1437,6 +1494,7 @@ void beginTransfer() {
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == hspiADC) {
+		ADC_Measure_Finish(true);
 		return;
 	}
 
@@ -1446,6 +1504,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == hspiADC) {
+		ADC_Measure_Finish(false);
 		return;
 	}
 
@@ -1492,6 +1551,8 @@ void Command_GetState(Request &request, Response &response) {
 	response.getState.ainValues[1] = ADC_samples[1];
 	response.getState.ainValues[2] = ADC_samples[2];
 	response.getState.ainValues[3] = ADC_samples[3];
+
+	response.getState.ainFaultStatus = ADC_faultStatus;
 
 	memcpy(&response.getState.dlogState, &dlogState, sizeof(DlogState));
 }

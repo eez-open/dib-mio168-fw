@@ -54,6 +54,8 @@ SPI_HandleTypeDef hspi3;
 SPI_HandleTypeDef hspi4;
 DMA_HandleTypeDef hdma_spi2_rx;
 DMA_HandleTypeDef hdma_spi2_tx;
+DMA_HandleTypeDef hdma_spi3_rx;
+DMA_HandleTypeDef hdma_spi3_tx;
 DMA_HandleTypeDef hdma_spi4_rx;
 DMA_HandleTypeDef hdma_spi4_tx;
 
@@ -644,12 +646,18 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
+  /* DMA1_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   /* DMA1_Stream3_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
   /* DMA1_Stream4_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+  /* DMA1_Stream5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
   /* DMA2_Stream0_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
@@ -783,11 +791,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(DAC_CLR_SEL_1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : DAC_CLR_SEL_2_Pin ADC_DRDY_Pin */
-  GPIO_InitStruct.Pin = DAC_CLR_SEL_2_Pin|ADC_DRDY_Pin;
+  /*Configure GPIO pin : DAC_CLR_SEL_2_Pin */
+  GPIO_InitStruct.Pin = DAC_CLR_SEL_2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+  HAL_GPIO_Init(DAC_CLR_SEL_2_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : DOUT_FAULT_Pin ADIB2_ID0_Pin */
   GPIO_InitStruct.Pin = DOUT_FAULT_Pin|ADIB2_ID0_Pin;
@@ -847,6 +855,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : ADC_DRDY_Pin */
+  GPIO_InitStruct.Pin = ADC_DRDY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(ADC_DRDY_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
