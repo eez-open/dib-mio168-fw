@@ -1,7 +1,21 @@
+#include <math.h>
+
 #include "main.h"
 
 #include "firmware.h"
 #include "utils.h"
+
+////////////////////////////////////////////////////////////////////////////////
+
+#define DEBUG_VARS 1
+
+#if DEBUG_VARS
+volatile uint32_t g_debugVar1;
+volatile uint32_t g_debugVar2;
+volatile uint32_t g_debugVar3;
+volatile float g_debugVar4;
+volatile uint16_t g_debugVar5;
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -11,8 +25,8 @@ SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 float ADC_samples[4];
 uint16_t ADC_faultStatus;
 
-static const uint64_t ADC_MOVING_AVERAGE_NUM_SAMPLES = 500;
-static MovingAverage<float, double, ADC_MOVING_AVERAGE_NUM_SAMPLES> g_adcMovingAverage[4];
+static const uint64_t ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES = 25 * (1000 / 50);
+static MovingAverage<float, double, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
 
 static uint8_t ADC_pga[4];
 
@@ -157,7 +171,7 @@ void ADC_Relay_SetState(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
+void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16_t numSamples) {
 	uint8_t pga = 0b0001'0000;
 
 	if (channelIndex == 2 || channelIndex == 3) {
@@ -257,7 +271,12 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range) {
 
 	ADC_factor[channelIndex] = f;
 
-	g_adcMovingAverage[channelIndex].reset();
+	g_adcMovingAverage[channelIndex].reset(numSamples);
+
+#if DEBUG_VARS
+	g_debugVar1 = 0;
+#endif
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -281,7 +300,8 @@ void ADC_Setup() {
 		ADC_UpdateChannel(
 			channelIndex,
 			currentState.ain[channelIndex].mode,
-			currentState.ain[channelIndex].range
+			currentState.ain[channelIndex].range,
+			1
 		);
 	}
 
@@ -301,7 +321,9 @@ void ADC_SetParams(SetParams &newState) {
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
 		if (
 			newState.ain[channelIndex].mode != currentState.ain[channelIndex].mode ||
-			newState.ain[channelIndex].range != currentState.ain[channelIndex].range
+			newState.ain[channelIndex].range != currentState.ain[channelIndex].range ||
+			newState.ain[channelIndex].numPowerLineCycles != currentState.ain[channelIndex].numPowerLineCycles ||
+			newState.powerLineFrequency != currentState.powerLineFrequency
 		) {
 			// stop ADC read if started
 			if (ADC_started) {
@@ -310,10 +332,19 @@ void ADC_SetParams(SetParams &newState) {
 				HAL_Delay(1);
 			}
 			
+			uint16_t numSamples = (uint16_t)ceilf(newState.ain[channelIndex].numPowerLineCycles * (1000.0f / newState.powerLineFrequency));
+			if (numSamples < 1) {
+				numSamples = 1;
+			}
+			if (numSamples > ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES) {
+				numSamples = ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES;
+			}
+
 			ADC_UpdateChannel(
 				channelIndex,
 				newState.ain[channelIndex].mode,
-				newState.ain[channelIndex].range
+				newState.ain[channelIndex].range,
+				numSamples
 			);
 		}
 	}
@@ -370,13 +401,14 @@ inline void ADC_Measure() {
 	}
 
 #if DEBUG_VARS
-	if (++g_debugVar1 == ADC_MOVING_AVERAGE_NUM_SAMPLES) {
+	g_debugVar5 = g_adcMovingAverage[0].getN();
+	if (++g_debugVar1 == g_adcMovingAverage[0].getN()) {
 		g_debugVar1 = 0;
 		uint32_t tickCount = HAL_GetTick();
 		g_debugVar2 = tickCount - g_debugVar3;
 		g_debugVar3 = tickCount;
 	}
-	g_debugVar4 = ADC_faultStatus;
+	g_debugVar4 = ADC_samples[0] * 10000;
 #endif
 }
 
@@ -423,12 +455,13 @@ void ADC_Measure_Finish(bool ok) {
 	}
 
 #if DEBUG_VARS
-	if (++g_debugVar1 == ADC_MOVING_AVERAGE_NUM_SAMPLES) {
+	if (++g_debugVar1 == g_adcMovingAverage[0].getN()) {
 		g_debugVar1 = 0;
 		uint32_t tickCount = HAL_GetTick();
 		g_debugVar2 = tickCount - g_debugVar3;
 		g_debugVar3 = tickCount;
 	}
+	g_debugVar4 = ADC_samples[0];
 #endif
 }
 

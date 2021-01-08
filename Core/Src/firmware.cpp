@@ -19,15 +19,6 @@
 #include "din_dlog.h"
 #include "utils.h"
 
-#define DEBUG_VARS 1
-
-#if DEBUG_VARS
-volatile uint32_t g_debugVar1;
-volatile uint32_t g_debugVar2;
-volatile uint32_t g_debugVar3;
-volatile uint16_t g_debugVar4;
-#endif
-
 ////////////////////////////////////////////////////////////////////////////////
 
 extern "C" SPI_HandleTypeDef hspi4;

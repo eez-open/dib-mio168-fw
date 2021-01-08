@@ -50,7 +50,10 @@ struct SetParams {
 	struct {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
+		uint8_t numPowerLineCycles; // from 0 to 25
 	} ain[4];
+
+	uint8_t powerLineFrequency; // 50 or 60
 
 	struct {
 		uint8_t outputEnabled;
