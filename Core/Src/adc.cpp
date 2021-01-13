@@ -175,7 +175,7 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 	uint8_t pga = 0b0001'0000;
 
 	if (channelIndex == 2 || channelIndex == 3) {
-		if (mode == SOURCE_MODE_CURRENT) {
+		if (mode == MEASURE_MODE_CURRENT) {
 			if (range == 0) {
 				pga = 0b0010'0000; // x2
 			} else if (range == 1) {
@@ -191,52 +191,52 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 	ADC_WriteReg(0x05 + channelIndex, 0b0000'0000 | pga);
 
 	if (channelIndex == 0) {
-		ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(1, USEL10_1_GPIO_Port, USEL10_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, mode == SOURCE_MODE_VOLTAGE && range == 2);
-		ADC_Pin_SetState(3, ISEL_1_GPIO_Port, ISEL_1_Pin, mode == SOURCE_MODE_CURRENT);
+		ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(1, USEL10_1_GPIO_Port, USEL10_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
+		ADC_Pin_SetState(3, ISEL_1_GPIO_Port, ISEL_1_Pin, mode == MEASURE_MODE_CURRENT);
 	} else if (channelIndex == 1) {
-		ADC_Pin_SetState(4, USEL1_2_GPIO_Port, USEL1_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(5, USEL10_2_GPIO_Port, USEL10_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(6, USEL100_2_GPIO_Port, USEL100_2_Pin, mode == SOURCE_MODE_VOLTAGE && range == 2);
-		ADC_Pin_SetState(7, ISEL_2_GPIO_Port, ISEL_2_Pin, mode == SOURCE_MODE_CURRENT);
+		ADC_Pin_SetState(4, USEL1_2_GPIO_Port, USEL1_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(5, USEL10_2_GPIO_Port, USEL10_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(6, USEL100_2_GPIO_Port, USEL100_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
+		ADC_Pin_SetState(7, ISEL_2_GPIO_Port, ISEL_2_Pin, mode == MEASURE_MODE_CURRENT);
 	} else if (channelIndex == 2) {
 		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
 		// Current 1A   : ISEL_MID, ISEL10A, ISEL
 		// Current 10A  : ISEL_MID
 
-		ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(9, USEL10_3_GPIO_Port, USEL10_3_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, mode == SOURCE_MODE_CURRENT && range == 0);
-		ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, mode == SOURCE_MODE_CURRENT && (range == 1 || range == 2));
+		ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(9, USEL10_3_GPIO_Port, USEL10_3_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, mode == MEASURE_MODE_CURRENT && range == 0);
+		ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, mode == MEASURE_MODE_CURRENT && (range == 1 || range == 2));
 
 		ADC_Relay_SetState(0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin,
-			mode == SOURCE_MODE_VOLTAGE || (mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1)));
+			mode == MEASURE_MODE_VOLTAGE || (mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1)));
 
 		ADC_Relay_SetState(1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin,
-			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
+			mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1));
 	} else {
 		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
 		// Current 1A   : ISEL_MID, ISEL10A, ISEL
 		// Current 10A  : ISEL_MID
 
-		ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(13, USEL10_4_GPIO_Port, USEL10_4_Pin, mode == SOURCE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, mode == SOURCE_MODE_CURRENT && range == 0);
-		ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, mode == SOURCE_MODE_CURRENT && (range == 1 || range == 2));
+		ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+		ADC_Pin_SetState(13, USEL10_4_GPIO_Port, USEL10_4_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+		ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, mode == MEASURE_MODE_CURRENT && range == 0);
+		ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, mode == MEASURE_MODE_CURRENT && (range == 1 || range == 2));
 
 		ADC_Relay_SetState(2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin,
-			mode == SOURCE_MODE_VOLTAGE || (mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1)));
+			mode == MEASURE_MODE_VOLTAGE || (mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1)));
 
 		ADC_Relay_SetState(3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin,
-			mode == SOURCE_MODE_CURRENT && (range == 0 || range == 1));
+			mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1));
 	}
 
 	//
 	double f;
 
 	if (channelIndex < 2) {
-		if (mode == SOURCE_MODE_VOLTAGE) {
+		if (mode == MEASURE_MODE_VOLTAGE) {
 			if (range == 0) {
 				f = 2.4; // +/- 2.4 V
 			} else if (range == 1) {
@@ -244,19 +244,19 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 			} else {
 				f = 240.0; // +/- 240 V
 			}
-		} else if (mode == SOURCE_MODE_CURRENT) {
+		} else if (mode == MEASURE_MODE_CURRENT) {
 			f = 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
 		} else {
 			f = 0;
 		}
 	} else {
-		if (mode == SOURCE_MODE_VOLTAGE) {
+		if (mode == MEASURE_MODE_VOLTAGE) {
 			if (range == 0) {
 				f = 2.4; // +/- 2.4 V
 			} else {
 				f = 12.0; // +/- 12 V
 			}
-		} else if (mode == SOURCE_MODE_CURRENT) {
+		} else if (mode == MEASURE_MODE_CURRENT) {
 			if (range == 0) {
 				f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
 			} else if (range == 1) {
@@ -297,13 +297,16 @@ void ADC_Setup() {
 	////////////////////////////////////////
 
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-		ADC_UpdateChannel(
-			channelIndex,
-			currentState.ain[channelIndex].mode,
-			currentState.ain[channelIndex].range,
-			1
-		);
+		uint8_t mode = MEASURE_MODE_VOLTAGE;
+		uint8_t range = channelIndex == 0 || channelIndex == 1 ? 2 : 1;
+
+		currentState.ain[channelIndex].mode = mode;
+		currentState.ain[channelIndex].range = range;
+
+		ADC_UpdateChannel(channelIndex, mode, range, 1);
 	}
+
+	////////////////////////////////////////
 
 	ADC_OffsetCalc_Command();
 }
@@ -322,7 +325,7 @@ void ADC_SetParams(SetParams &newState) {
 		if (
 			newState.ain[channelIndex].mode != currentState.ain[channelIndex].mode ||
 			newState.ain[channelIndex].range != currentState.ain[channelIndex].range ||
-			newState.ain[channelIndex].numPowerLineCycles != currentState.ain[channelIndex].numPowerLineCycles ||
+			newState.ain[channelIndex].nplc != currentState.ain[channelIndex].nplc ||
 			newState.powerLineFrequency != currentState.powerLineFrequency
 		) {
 			// stop ADC read if started
@@ -332,7 +335,7 @@ void ADC_SetParams(SetParams &newState) {
 				HAL_Delay(1);
 			}
 			
-			uint16_t numSamples = (uint16_t)ceilf(newState.ain[channelIndex].numPowerLineCycles * (1000.0f / newState.powerLineFrequency));
+			uint16_t numSamples = (uint16_t)roundf(newState.ain[channelIndex].nplc * (1000.0f / newState.powerLineFrequency));
 			if (numSamples < 1) {
 				numSamples = 1;
 			}

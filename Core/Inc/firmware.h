@@ -3,6 +3,11 @@
 static const size_t MAX_PATH_LENGTH = 255;
 static const size_t CHANNEL_LABEL_MAX_LENGTH = 5;
 
+enum MeasureMode {
+	MEASURE_MODE_CURRENT,
+	MEASURE_MODE_VOLTAGE
+};
+
 enum SourceMode {
 	SOURCE_MODE_CURRENT,
 	SOURCE_MODE_VOLTAGE
@@ -50,7 +55,7 @@ struct SetParams {
 	struct {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
-		uint8_t numPowerLineCycles; // from 0 to 25
+		float nplc; // from 0 to 25
 	} ain[4];
 
 	uint8_t powerLineFrequency; // 50 or 60

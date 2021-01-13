@@ -227,10 +227,7 @@ extern "C" void loop() {
     } else {
     	response.command = COMMAND_NONE;
 
-    	while (!READ_PIN(DIB_NSS_GPIO_Port, DIB_NSS_Pin)) {
-    	}
-
-		HAL_SPI_DeInit(hspiMaster);
+    	HAL_SPI_DeInit(hspiMaster);
 		SPI4_Init();
     }
 }
