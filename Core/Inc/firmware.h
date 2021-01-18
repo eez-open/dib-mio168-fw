@@ -16,20 +16,20 @@ enum SourceMode {
 ////////////////////////////////////////////////////////////////////////////////
 
 enum Command {
-	COMMAND_NONE,
+	COMMAND_NONE = 0x69365f39,
 
-    COMMAND_GET_INFO,
-    COMMAND_GET_STATE,
-    COMMAND_SET_PARAMS,
+    COMMAND_GET_INFO = 0x0200ccb7,
+    COMMAND_GET_STATE = 0x0093f106,
+    COMMAND_SET_PARAMS = 0x1ff1c78c,
 
-    COMMAND_DLOG_RECORDING_START,
-    COMMAND_DLOG_RECORDING_STOP,
+    COMMAND_DLOG_RECORDING_START = 0x7d3f9f28,
+    COMMAND_DLOG_RECORDING_STOP = 0x7de480a1,
 
-    COMMAND_DISK_DRIVE_INITIALIZE,
-    COMMAND_DISK_DRIVE_STATUS,
-    COMMAND_DISK_DRIVE_READ,
-    COMMAND_DISK_DRIVE_WRITE,
-    COMMAND_DISK_DRIVE_IOCTL
+    COMMAND_DISK_DRIVE_INITIALIZE = 0x0f8066f8,
+    COMMAND_DISK_DRIVE_STATUS = 0x457f0700,
+    COMMAND_DISK_DRIVE_READ = 0x4478491d,
+    COMMAND_DISK_DRIVE_WRITE = 0x7d652b00,
+    COMMAND_DISK_DRIVE_IOCTL = 0x22cc23c8
 };
 
 #define GET_STATE_COMMAND_FLAG_SD_CARD_PRESENT (1 << 0)
@@ -89,7 +89,7 @@ struct DlogRecordingStart {
 #define DISK_DRIVER_IOCTL_BUFFER_MAX_SIZE 4
 
 struct Request {
-    uint8_t command;
+    uint32_t command;
 
     union {
         struct {
@@ -117,7 +117,7 @@ struct Request {
 };
 
 struct Response {
-	uint8_t command;
+	uint32_t command;
 
     union {
         struct {

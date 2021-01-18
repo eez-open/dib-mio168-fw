@@ -19,28 +19,20 @@
 #include "din_dlog.h"
 #include "utils.h"
 
-////////////////////////////////////////////////////////////////////////////////
+static const uint32_t CONF_SPI_TRANSFER_TIMEOUT_MS = 500;
 
 extern "C" SPI_HandleTypeDef hspi4;
 extern "C" void SPI4_Init(void);
 SPI_HandleTypeDef *hspiMaster = &hspi4; // for MASTER-SLAVE communication
+volatile enum {
+	TRANSFER_STATE_WAIT,
+	TRANSFER_STATE_SUCCESS,
+	TRANSFER_STATE_ERROR
+} transferState;
 
 DWORD g_fatTime;
 
 SetParams currentState;
-
-////////////////////////////////////////////////////////////////////////////////
-// MASTER - SLAVE Communication
-
-uint32_t input[(sizeof(Request) + 3) / 4 + 1];
-uint32_t output[(sizeof(Request) + 3) / 4];
-volatile int transferCompleted;
-
-void beginTransfer() {
-    transferCompleted = 0;
-    HAL_SPI_TransmitReceive_DMA(hspiMaster, (uint8_t *)output, (uint8_t *)input, sizeof(Request));
-    RESET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
-}
 
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == hspiADC) {
@@ -49,7 +41,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 	}
 
 	SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
-	transferCompleted = 1;
+	transferState = TRANSFER_STATE_SUCCESS;
 }
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
@@ -59,21 +51,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 	}
 
     SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
-	transferCompleted = 2;
-}
-
-int waitTransferCompletion() {
-	uint32_t startTick = HAL_GetTick();
-	while (!transferCompleted) {
-		if (HAL_GetTick() - startTick > 500) {
-			HAL_SPI_Abort(hspiMaster);
-			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
-			return 2;
-		}
-
-		DLOG_LoopWrite();
-	}
-	return transferCompleted;
+	transferState = TRANSFER_STATE_ERROR;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -180,6 +158,7 @@ void Command_DiskDriveIoctl(Request &request, Response &response) {
 ////////////////////////////////////////////////////////////////////////////////
 // Setup & Loop
 
+// setup is called once at the beginning from the main.c
 extern "C" void setup() {
 	Din_Setup();
 	Dout_Setup();
@@ -190,16 +169,34 @@ extern "C" void setup() {
     PWM_Setup();
 }
 
+// loop is called, of course, inside the loop from the main.c
 extern "C" void loop() {
-	beginTransfer();
+	// start SPI transfer
+	uint32_t input[(sizeof(Request) + 3) / 4 + 1];
+	uint32_t output[(sizeof(Request) + 3) / 4];
+	transferState = TRANSFER_STATE_WAIT;
+    HAL_SPI_TransmitReceive_DMA(hspiMaster, (uint8_t *)output, (uint8_t *)input, sizeof(Request));
+    RESET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 
-    auto transferResult = waitTransferCompletion();
+    // wait for the transfer to finish
+	uint32_t startTick = HAL_GetTick();
+	while (transferState == TRANSFER_STATE_WAIT) {
+		if (HAL_GetTick() - startTick > CONF_SPI_TRANSFER_TIMEOUT_MS) {
+			// transfer is taking too long to finish, maybe something is stuck, abort it
+			HAL_SPI_Abort(hspiMaster);
+			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
+			transferState = TRANSFER_STATE_ERROR;
+			break;
+		}
+		DLOG_LoopWrite();
+	}
 
     Request &request = *(Request *)input;
     Response &response = *(Response *)output;
 
-    if (transferResult == 1) {
-    	response.command = 0x80 | request.command;
+    if (transferState == TRANSFER_STATE_SUCCESS) {
+    	// a way to tell the master that command was handled
+    	response.command = 0x8000 | request.command;
 
     	if (request.command == COMMAND_GET_INFO) {
 			Command_GetInfo(request, response);
@@ -222,12 +219,15 @@ extern "C" void loop() {
 		} else if (request.command == COMMAND_DISK_DRIVE_IOCTL) {
 			Command_DiskDriveIoctl(request, response);
 		} else {
+			// unknown command received, tell the master that no command was handled
 	    	response.command = COMMAND_NONE;
 		}
     } else {
-    	response.command = COMMAND_NONE;
-
+    	// invalid transfer, reinitialize SPI just in case
     	HAL_SPI_DeInit(hspiMaster);
 		SPI4_Init();
+
+		// tell the master that no command was handled
+    	response.command = COMMAND_NONE;
     }
 }
