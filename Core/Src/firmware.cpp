@@ -19,7 +19,7 @@
 #include "din_dlog.h"
 #include "utils.h"
 
-static const uint32_t CONF_SPI_TRANSFER_TIMEOUT_MS = 2000;
+//static const uint32_t CONF_SPI_TRANSFER_TIMEOUT_MS = 2500;
 
 extern "C" SPI_HandleTypeDef hspi4;
 extern "C" void SPI4_Init(void);
@@ -179,17 +179,17 @@ extern "C" void loop() {
     RESET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
 
     // wait for the transfer to finish
-	uint32_t startTick = HAL_GetTick();
+//	uint32_t startTick = HAL_GetTick();
 	while (transferState == TRANSFER_STATE_WAIT) {
-		if (HAL_GetTick() - startTick > CONF_SPI_TRANSFER_TIMEOUT_MS) {
-			// transfer is taking too long to finish, maybe something is stuck, abort it
-			__disable_irq();
-			HAL_SPI_Abort(hspiMaster);
-			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
-			transferState = TRANSFER_STATE_ERROR;
-			__enable_irq();
-			break;
-		}
+//		if (HAL_GetTick() - startTick > CONF_SPI_TRANSFER_TIMEOUT_MS) {
+//			// transfer is taking too long to finish, maybe something is stuck, abort it
+//			__disable_irq();
+//			HAL_SPI_Abort(hspiMaster);
+//			SET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
+//			transferState = TRANSFER_STATE_ERROR;
+//			__enable_irq();
+//			break;
+//		}
 		DLOG_LoopWrite();
 	}
 
