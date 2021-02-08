@@ -258,9 +258,9 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 			}
 		} else if (mode == MEASURE_MODE_CURRENT) {
 			if (range == 0) {
-				f = 0.024; // +/- 24 mA (rsense is 50 ohm, PGA is 2)
+				f = 0.024 * 50.0 / 39.0; // +/- 24 mA (rsense is 39 ohm (was 50 ohm), PGA is 2)
 			} else if (range == 1) {
-				f = 1.2; // +/- 1.2 A (rsense 0.5 ohm, PGA is 4)
+				f = 1.2 * 0.5 / 0.33; // +/- 1.2 A (rsense 0.33 ohm (was 0.5 ohm), PGA is 4)
 			} else {
 				f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
 			}
