@@ -16,10 +16,12 @@ DlogState dlogState;
 uint8_t g_dinResources;
 uint8_t g_doutResources;
 
-uint8_t g_writerBuffer[48 * 1024];
-dlog_file::Writer g_writer(g_writerBuffer, sizeof(g_writerBuffer));
+uint8_t *g_writerBuffer = g_buffer;
+static const uint32_t WRITER_BUFFER_SIZE = 48 * 1024;
+dlog_file::Writer g_writer(g_writerBuffer, WRITER_BUFFER_SIZE);
 
-uint8_t g_fileWriteBuffer[24 * 1024];
+uint8_t *g_fileWriteBuffer = g_buffer + WRITER_BUFFER_SIZE;
+static const uint32_t FILE_WRITE_BUFFER_SIZE = 24 * 1024;
 uint32_t g_fileWriteBufferIndex;
 
 uint32_t g_numSamples;
@@ -158,7 +160,7 @@ FRESULT DLOG_StartFile(DlogRecordingStart &dlogRecordingStart) {
 uint32_t DLOG_WriteFile(bool flush = false) {
 	__disable_irq();
 	{
-		uint32_t n = sizeof(g_fileWriteBuffer) - g_fileWriteBufferIndex;
+		uint32_t n = FILE_WRITE_BUFFER_SIZE - g_fileWriteBufferIndex;
 
 		uint32_t writerBufferIndex = g_writer.getBufferIndex();
 		uint32_t diff = writerBufferIndex - g_lastSavedBufferIndex;
@@ -167,10 +169,10 @@ uint32_t DLOG_WriteFile(bool flush = false) {
 			n = diff;
 		}
 
-		if (diff > sizeof(g_writerBuffer)) {
+		if (diff > WRITER_BUFFER_SIZE) {
 			// overflow detected
 
-			uint32_t nInvalid = diff - sizeof(g_writerBuffer);
+			uint32_t nInvalid = diff - WRITER_BUFFER_SIZE;
 			if (nInvalid >= n) {
 				nInvalid = n;
 			}
@@ -184,7 +186,7 @@ uint32_t DLOG_WriteFile(bool flush = false) {
 		}
 
 		if (n > 0) {
-			uint32_t from = g_lastSavedBufferIndex % sizeof(g_writerBuffer);
+			uint32_t from = g_lastSavedBufferIndex % WRITER_BUFFER_SIZE;
 			memcpy(g_fileWriteBuffer + g_fileWriteBufferIndex, g_writerBuffer + from, n);
 			g_fileWriteBufferIndex += n;
 			g_lastSavedBufferIndex += n;
@@ -192,7 +194,7 @@ uint32_t DLOG_WriteFile(bool flush = false) {
 	}
 	__enable_irq();
 
-	if (g_fileWriteBufferIndex == sizeof(g_fileWriteBuffer) || flush) {
+	if (g_fileWriteBufferIndex == FILE_WRITE_BUFFER_SIZE || flush) {
 		UINT btw = g_fileWriteBufferIndex;
 		UINT bw;
 		FRESULT result = f_write(&g_file, g_fileWriteBuffer, btw, &bw);

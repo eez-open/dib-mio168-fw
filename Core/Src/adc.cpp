@@ -1,23 +1,21 @@
 #include <math.h>
+#include <memory.h>
 
 #include "main.h"
 
 #include "firmware.h"
 #include "utils.h"
 
-////////////////////////////////////////////////////////////////////////////////
-
-#define DEBUG_VARS 1
-
-#if DEBUG_VARS
-volatile uint32_t g_debugVar1;
-volatile uint32_t g_debugVar2;
-volatile uint32_t g_debugVar3;
-volatile float g_debugVar4;
-volatile uint16_t g_debugVar5;
-#endif
+volatile uint32_t g_debugVarDiff_ADC1 = 0;
+volatile uint32_t g_debugVarDiff_ADC2 = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
+
+static uint8_t *ADC_buffer = g_buffer;
+static uint32_t ADC_DLOG_RECORD_SIZE_24_BIT = 14;
+static uint32_t ADC_DLOG_RECORD_SIZE_16_BIT = 10;
+static uint32_t ADC_bufferIndex = 0;
+static uint32_t ADC_bufferLastTransferredIndex = 0;
 
 extern "C" SPI_HandleTypeDef hspi3;
 SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
@@ -26,38 +24,46 @@ float ADC_samples[4];
 uint16_t ADC_faultStatus;
 
 static const uint64_t ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES = 25 * (1000 / 50);
-static MovingAverage<float, double, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
+static MovingAverage<int32_t, int64_t, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
 
 static uint8_t ADC_pga[4];
 
 static double ADC_factor[4];
 
-volatile static bool ADC_started = true;
+volatile static bool ADC_measureStarted = false;
+
+uint8_t ADC_tx[16] = { 0x12 };
+uint8_t ADC_rx[16];
+
+int ADC_ksps;
+#define IS_24_BIT (ADC_ksps < 32)
+
+bool ADC_DLOG_started;
+uint32_t ADC_DLOG_recordIndex = 0;
+uint32_t ADC_DLOG_bufferSize = 0;
+uint32_t ADC_DLOG_recordSize = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#define ADC_SPI_SELECT() RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
-#define ADC_SPI_DESELECT() delayMicroseconds(1); SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin)
-//#define ADC_SPI_SELECT() (void)0
-//#define ADC_SPI_DESELECT() (void)0
-
-#define SPI_IS_BUSY(SPIx)  (((SPIx)->SR & (SPI_SR_TXE | SPI_SR_RXNE)) == 0 || ((SPIx)->SR & SPI_SR_BSY))
-#define SPI_WAIT(SPIx)     while (SPI_IS_BUSY(SPIx))
+#define SPI_WAIT_TX(SPIx)    while (!(SPIx->SR & SPI_FLAG_TXE))
+#define SPI_WAIT_RX(SPIx)    while (!(SPIx->SR & SPI_FLAG_RXNE))
 #define SPI1_DR_8bit(SPIx) (*(__IO uint8_t *)((uint32_t)&(SPIx->DR)))
 
-uint8_t ADC_SPI_TransferLL(uint8_t data){
-	SPI_WAIT(SPI3);
+inline uint8_t ADC_SPI_TransferLL(uint8_t data){
+	SPI_WAIT_TX(SPI3);
 	SPI1_DR_8bit(SPI3) = data;
-	SPI_WAIT(SPI3);
+	SPI_WAIT_RX(SPI3);
 	return SPI1_DR_8bit(SPI3);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void ADC_SendSimpleCommand(uint8_t cmd) {
-	ADC_SPI_SELECT();
-	HAL_SPI_Transmit(hspiADC, &cmd, 1, 100);
-	ADC_SPI_DESELECT();
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	delayMicroseconds(5);
+	ADC_SPI_TransferLL(cmd);
+	delayMicroseconds(5);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -68,7 +74,7 @@ void ADC_WakeUp_Command() {
 
 void ADC_SwReset_Command() {
 	ADC_SendSimpleCommand(0x06);
-	delayMicroseconds(10);
+	delayMicroseconds(5);
 }
 
 void ADC_Start_Command() {
@@ -90,32 +96,42 @@ void ADC_OffsetCalc_Command() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void ADC_WriteReg(uint8_t reg, uint8_t val) {
-	uint8_t cmd[2];
-	cmd[0] = ( reg & 0b0001'1111 ) | 0b0100'0000;
-	cmd[1] = 1; // write 1 register
-
-	ADC_SPI_SELECT();
-	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
-	delayMicroseconds(2);
-	HAL_SPI_Transmit(hspiADC, &val, 1, 100);
-	ADC_SPI_DESELECT();
+uint8_t ADC_ReadReg(uint8_t reg) {
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	delayMicroseconds(5);
+	ADC_SPI_TransferLL((reg & 0b0001'1111) | 0b0010'0000);
+	delayMicroseconds(5);
+	ADC_SPI_TransferLL(0); // read 1 register
+	delayMicroseconds(5);
+	uint8_t value = ADC_SPI_TransferLL(0);
+	delayMicroseconds(5);
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	return value;
 }
 
-uint8_t ADC_ReadReg(uint8_t reg) {
-	uint8_t cmd[2];
-	cmd[0] = ( reg & 0b0001'1111 ) | 0b0010'0000;
-	cmd[1] = 1; // read 1 register
-
-	uint8_t value;
-
-	ADC_SPI_SELECT();
-	HAL_SPI_Transmit(hspiADC, cmd, 2, 100);
-	delayMicroseconds(2);
-	HAL_SPI_Receive(hspiADC, &value, 1, 100);
-	ADC_SPI_DESELECT();
-
-	return value;
+void ADC_WriteReg(uint8_t reg, uint8_t val) {
+	static const int NUM_RETRIES = 10;
+	for (int i = 0; i < NUM_RETRIES; i++) {
+		RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+		delayMicroseconds(5);
+		ADC_SPI_TransferLL((reg & 0b0001'1111) | 0b0100'0000);
+		delayMicroseconds(5);
+		ADC_SPI_TransferLL(0); // write 1 register
+		delayMicroseconds(5);
+		ADC_SPI_TransferLL(val);
+		delayMicroseconds(5);
+		SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+		// verify
+		if (reg == 0x03) {
+			if ((ADC_ReadReg(reg) & 0xFE) == val) {
+				break;
+			}
+		} else {
+			if (ADC_ReadReg(reg) == val) {
+				break;
+			}
+		}
+	};
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -272,24 +288,41 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 	ADC_factor[channelIndex] = f;
 
 	g_adcMovingAverage[channelIndex].reset(numSamples);
+}
 
-#if DEBUG_VARS
-	g_debugVar1 = 0;
-#endif
+////////////////////////////////////////////////////////////////////////////////
 
+void ADC_SetSampleRate(int ksps) {
+	if      (ksps == 2 ) ADC_WriteReg(0x01, 0b1111'0101); // CONFIG1  24-bit 2  KSPS
+	else if (ksps == 4 ) ADC_WriteReg(0x01, 0b1111'0100); // CONFIG1  24-bit 4  KSPS
+	else if (ksps == 8 ) ADC_WriteReg(0x01, 0b1111'0011); // CONFIG1  24-bit 8  KSPS
+	else if (ksps == 16) ADC_WriteReg(0x01, 0b1111'0010); // CONFIG1  24-bit 16 KSPS
+	else if (ksps == 32) ADC_WriteReg(0x01, 0b1111'0001); // CONFIG1  16-bit 32 KSPS
+	else if (ksps == 64) ADC_WriteReg(0x01, 0b1111'0000); // CONFIG1  16-bit 64 KSPS
+	else                 ADC_WriteReg(0x01, 0b1111'0110); // CONFIG1  24-bit 1  KSPS
+
+	ADC_ksps = ksps;
+
+	g_adcMovingAverage[0].reset();
+	g_adcMovingAverage[1].reset();
+	g_adcMovingAverage[2].reset();
+	g_adcMovingAverage[3].reset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void ADC_Setup() {
+	__HAL_SPI_ENABLE(hspiADC);
+
 	ADC_SwReset_Command();
 	ADC_WakeUp_Command();
 	ADC_StopReadContinuous_Command();
 
 	////////////////////////////////////////
 
-	ADC_WriteReg(0x01, 0b1111'0110); // CONFIG1  24-bit 16 KSPS
-	ADC_WriteReg(0x02, 0b1111'0101); // CONFIG2
+	ADC_SetSampleRate(1);
+
+	ADC_WriteReg(0x02, 0b1111'0010); // CONFIG2
 	ADC_WriteReg(0x03, 0b1100'0000); // CONFIG3
 
 	ADC_WriteReg(0x04, 0b0000'0000); // FAULT
@@ -313,6 +346,24 @@ void ADC_Setup() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+void ADC_StartMeasuring() {
+	// start ADC read if not started
+	if (!ADC_measureStarted) {
+		HAL_Delay(1);
+		ADC_Start_Command();
+		ADC_measureStarted = true;
+	}
+}
+
+void ADC_StopMeasuring() {
+	// stop ADC read if started
+	if (ADC_measureStarted) {
+		ADC_measureStarted = false;
+		ADC_Stop_Command();
+		HAL_Delay(1);
+	}
+}
+
 void ADC_SetParams(SetParams &newState) {
 	uint8_t ADC_pga_before[4] = {
 		ADC_pga[0],
@@ -328,12 +379,7 @@ void ADC_SetParams(SetParams &newState) {
 			newState.ain[channelIndex].nplc != currentState.ain[channelIndex].nplc ||
 			newState.powerLineFrequency != currentState.powerLineFrequency
 		) {
-			// stop ADC read if started
-			if (ADC_started) {
-				ADC_started = false;
-				ADC_Stop_Command();
-				HAL_Delay(1);
-			}
+			ADC_StopMeasuring();
 			
 			uint16_t numSamples = (uint16_t)roundf(newState.ain[channelIndex].nplc * (1000.0f / newState.powerLineFrequency));
 			if (numSamples < 1) {
@@ -362,12 +408,143 @@ void ADC_SetParams(SetParams &newState) {
 		ADC_OffsetCalc_Command();
 	}
 
-	// start ADC read if not started
-	if (!ADC_started) {
-		HAL_Delay(1);
-		ADC_Start_Command();
-		ADC_started = true;
+	ADC_StartMeasuring();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+void ADC_DLOG_Start(Request &request, Response &response) {
+	ADC_StopMeasuring();
+
+	response.dlogRecordingStart.conversionFactors[0] = ADC_factor[0];
+	response.dlogRecordingStart.conversionFactors[1] = ADC_factor[1];
+	response.dlogRecordingStart.conversionFactors[2] = ADC_factor[2];
+	response.dlogRecordingStart.conversionFactors[3] = ADC_factor[3];
+
+		 if (request.dlogRecordingStart.period < 1.0f / 32000) ADC_SetSampleRate(64);
+	else if (request.dlogRecordingStart.period < 1.0f / 16000) ADC_SetSampleRate(32);
+	else if (request.dlogRecordingStart.period < 1.0f /  8000) ADC_SetSampleRate(16);
+	else if (request.dlogRecordingStart.period < 1.0f /  4000) ADC_SetSampleRate( 8);
+	else if (request.dlogRecordingStart.period < 1.0f /  2000) ADC_SetSampleRate( 4);
+	else if (request.dlogRecordingStart.period < 1.0f /  1000) ADC_SetSampleRate( 2);
+	else                                                       ADC_SetSampleRate( 1);
+
+	ADC_bufferIndex = 0;
+	ADC_bufferLastTransferredIndex = 0;
+	ADC_DLOG_recordIndex = 0;
+	ADC_DLOG_recordSize = IS_24_BIT ? ADC_DLOG_RECORD_SIZE_24_BIT : ADC_DLOG_RECORD_SIZE_16_BIT;
+	ADC_DLOG_bufferSize = (BUFFER_SIZE / ADC_DLOG_recordSize) * ADC_DLOG_recordSize;
+
+	ADC_DLOG_started = true;
+
+	ADC_StartMeasuring();
+}
+
+void ADC_DLOG_Stop(Request &request, Response &response) {
+	ADC_StopMeasuring();
+
+	ADC_DLOG_started = false;
+	ADC_SetSampleRate(1);
+
+	ADC_StartMeasuring();
+}
+
+void ADC_DLOG_Data(Response &response) {
+	// TODO add check ADC_bufferLastTransferredIndex + ADC_BUFFER_SIZE_24_BIT > ADC_bufferIndex
+
+	response.dlogRecordingData.recordIndex = ADC_DLOG_recordIndex;
+
+	auto n = ADC_bufferIndex - ADC_bufferLastTransferredIndex;
+	g_debugVarDiff_ADC1 = n;
+	if (n > sizeof(response.dlogRecordingData.buffer)) {
+		n = sizeof(response.dlogRecordingData.buffer);
 	}
+
+	n /= ADC_DLOG_recordSize;
+	response.dlogRecordingData.numRecords = n;
+	n *= ADC_DLOG_recordSize;
+
+	if (n > 0) {
+		auto i = ADC_bufferLastTransferredIndex % ADC_DLOG_bufferSize;
+		auto j = (ADC_bufferLastTransferredIndex + n) % ADC_DLOG_bufferSize;
+		if (i < j) {
+			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, n);
+		} else {
+			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, ADC_DLOG_bufferSize - i);
+			memcpy(response.dlogRecordingData.buffer, ADC_buffer, j);
+		}
+	}
+
+	ADC_bufferLastTransferredIndex += n;
+
+	ADC_DLOG_recordIndex += response.dlogRecordingData.numRecords;
+
+	g_debugVarDiff_ADC2 = response.dlogRecordingData.numRecords;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// ADC measure
+//
+
+void ADC_GetSamples(float *samples) {
+	if (IS_24_BIT) {
+		samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 23));
+		samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 23));
+		samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 23));
+		samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 23));
+	} else {
+		samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 15));
+		samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 15));
+		samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 15));
+		samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 15));
+	}
+}
+
+void ADC_AfterMeasure() {
+	uint8_t *rx = ADC_rx + 1;
+
+	ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
+	rx += 3;
+
+	if (ADC_DLOG_started) {
+		auto p = ADC_buffer + ADC_bufferIndex % ADC_DLOG_bufferSize;
+
+		memcpy(p, rx, ADC_DLOG_recordSize - 2);
+
+		p[ADC_DLOG_recordSize - 2] =
+			(READ_PIN(DIN0_GPIO_Port, DIN0_Pin) << 0) |
+			(READ_PIN(DIN1_GPIO_Port, DIN1_Pin) << 1) |
+			(READ_PIN(DIN2_GPIO_Port, DIN2_Pin) << 2) |
+			(READ_PIN(DIN3_GPIO_Port, DIN3_Pin) << 3) |
+			(READ_PIN(DIN4_GPIO_Port, DIN4_Pin) << 4) |
+			(READ_PIN(DIN5_GPIO_Port, DIN5_Pin) << 5) |
+			(READ_PIN(DIN6_GPIO_Port, DIN6_Pin) << 6) |
+			(READ_PIN(DIN7_GPIO_Port, DIN7_Pin) << 7);
+
+		p[ADC_DLOG_recordSize - 1] = currentState.doutStates;
+
+		ADC_bufferIndex += ADC_DLOG_recordSize;
+	}
+
+	int32_t ADC_ch[4];
+
+	if (IS_24_BIT) {
+		ADC_ch[0] = ((int32_t)((rx[0] << 24) | (rx[ 1] << 16) | (rx[ 2] << 8))) >> 8;
+		ADC_ch[1] = ((int32_t)((rx[3] << 24) | (rx[ 4] << 16) | (rx[ 5] << 8))) >> 8;
+		ADC_ch[2] = ((int32_t)((rx[6] << 24) | (rx[ 7] << 16) | (rx[ 8] << 8))) >> 8;
+		ADC_ch[3] = ((int32_t)((rx[9] << 24) | (rx[10] << 16) | (rx[11] << 8))) >> 8;
+	} else {
+		ADC_ch[0] = int16_t((rx[0] << 8) | rx[1]);
+		ADC_ch[1] = int16_t((rx[2] << 8) | rx[3]);
+		ADC_ch[2] = int16_t((rx[4] << 8) | rx[5]);
+		ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
+	}
+
+	g_adcMovingAverage[0](ADC_ch[0]);
+	g_adcMovingAverage[1](ADC_ch[1]);
+	g_adcMovingAverage[2](ADC_ch[2]);
+	g_adcMovingAverage[3](ADC_ch[3]);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -376,43 +553,34 @@ void ADC_SetParams(SetParams &newState) {
 //
 
 inline void ADC_Measure() {
-	ADC_SPI_SELECT();
+	// RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+
+	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+	uint8_t *rx = ADC_rx + 1;
 
 	ADC_SPI_TransferLL(0x12);
+	if (IS_24_BIT) {
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
 
-	uint8_t rx[15];
-	for (int i = 0; i < 15; i++) {
-		rx[i] = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+	} else {
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
 	}
 
-	ADC_SPI_DESELECT();
+	ADC_AfterMeasure();
 
-	ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
-	int32_t ch[4];
-
-	ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
-	ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
-	ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
-	ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
-
-	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-		double f = ADC_factor[channelIndex];
-		float value = (float)(f * ch[channelIndex] / (1 << 23));
-		g_adcMovingAverage[channelIndex](value);
-		ADC_samples[channelIndex] = g_adcMovingAverage[channelIndex];
-	}
-
-#if DEBUG_VARS
-	g_debugVar5 = g_adcMovingAverage[0].getN();
-	if (++g_debugVar1 == g_adcMovingAverage[0].getN()) {
-		g_debugVar1 = 0;
-		uint32_t tickCount = HAL_GetTick();
-		g_debugVar2 = tickCount - g_debugVar3;
-		g_debugVar3 = tickCount;
-	}
-	g_debugVar4 = ADC_samples[0] * 10000;
-#endif
+	// SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -420,60 +588,31 @@ inline void ADC_Measure() {
 // DMA version
 //
 
-uint8_t ADX_rx[16];
-
 inline void ADC_Measure_Start() {
-	uint8_t ADC_tx[16] = {
-		0x12, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00
-	};
-
+	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADX_rx, 16);
+	if (IS_24_BIT) {
+		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 16);
+	} else {
+		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 12);
+	}
 }
 
-void ADC_Measure_Finish(bool ok) {
+void ADC_DMA_TransferCompleted(bool ok) {
+//	if (ok) {
+		ADC_AfterMeasure();
+//	}
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	if (ok && ADC_started) {
-		uint8_t *rx = ADX_rx + 1;
-
-		ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
-
-		int32_t ch[4];
-
-		ch[0] = ((int32_t)((rx[ 3] << 24) + (rx[ 4] << 16) +(rx[ 5] << 8))) >> 8;
-		ch[1] = ((int32_t)((rx[ 6] << 24) + (rx[ 7] << 16) +(rx[ 8] << 8))) >> 8;
-		ch[2] = ((int32_t)((rx[ 9] << 24) + (rx[10] << 16) +(rx[11] << 8))) >> 8;
-		ch[3] = ((int32_t)((rx[12] << 24) + (rx[13] << 16) +(rx[14] << 8))) >> 8;
-
-		for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-			double f = ADC_factor[channelIndex];
-			float value = (float)(f * ch[channelIndex] / (1 << 23));
-			g_adcMovingAverage[channelIndex](value);
-			ADC_samples[channelIndex] = g_adcMovingAverage[channelIndex];
-		}
-	}
-
-#if DEBUG_VARS
-	if (++g_debugVar1 == g_adcMovingAverage[0].getN()) {
-		g_debugVar1 = 0;
-		uint32_t tickCount = HAL_GetTick();
-		g_debugVar2 = tickCount - g_debugVar3;
-		g_debugVar3 = tickCount;
-	}
-	g_debugVar4 = ADC_samples[0];
-#endif
+	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
+
+////////////////////////////////////////////////////////////////////////////////
 
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ADC_DRDY_Pin) {
-		if (ADC_started) {
-			ADC_Measure();
-			// DMA version
-			// ADC_Measure_Start();
+		if (ADC_measureStarted) {
+            //ADC_Measure();
+			ADC_Measure_Start(); // DMA version
 		}
 	}
 }

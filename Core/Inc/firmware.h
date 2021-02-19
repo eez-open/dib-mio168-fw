@@ -24,6 +24,7 @@ enum Command {
 
     COMMAND_DLOG_RECORDING_START = 0x7d3f9f28,
     COMMAND_DLOG_RECORDING_STOP = 0x7de480a1,
+    COMMAND_DLOG_RECORDING_DATA = 0x1ddc8028,
 
     COMMAND_DISK_DRIVE_INITIALIZE = 0x0f8066f8,
     COMMAND_DISK_DRIVE_STATUS = 0x457f0700,
@@ -55,10 +56,10 @@ struct SetParams {
 	struct {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
-		float nplc; // from 0 to 25
+        float nplc; // from 0 to 25
 	} ain[4];
 
-	uint8_t powerLineFrequency; // 50 or 60
+    uint8_t powerLineFrequency; // 50 or 60
 
 	struct {
 		uint8_t outputEnabled;
@@ -106,7 +107,8 @@ struct Request {
 
         struct {
             uint32_t sector;
-            uint8_t buffer[512];
+            uint16_t reserved;
+            uint8_t buffer[1024];
         } diskDriveWrite;
 
         struct {
@@ -142,6 +144,16 @@ struct Response {
         } setParams;
 
         struct {
+            float conversionFactors[4];
+        } dlogRecordingStart;
+
+        struct {
+            uint32_t recordIndex;
+            uint16_t numRecords;
+            uint8_t buffer[1024];
+        } dlogRecordingData;
+
+        struct {
             uint8_t result;
         } diskDriveInitialize;
 
@@ -168,3 +180,9 @@ struct Response {
 ////////////////////////////////////////////////////////////////////////////////
 
 extern SetParams currentState;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static const uint32_t BUFFER_SIZE = ((48 + 24) * 1024);
+extern uint8_t g_buffer[];
+

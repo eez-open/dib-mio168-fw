@@ -25,6 +25,11 @@ public:
 		}
     }
 
+    void reset() {
+        m_numSamples = 0;
+        m_total = 0;
+    }
+
     void reset(uint16_t N) {
     	m_N = N;
         m_numSamples = 0;

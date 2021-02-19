@@ -19,6 +19,12 @@
 #include "din_dlog.h"
 #include "utils.h"
 
+volatile uint32_t g_debugVarDiff;
+
+////////////////////////////////////////////////////////////////////////////////
+
+uint8_t g_buffer[BUFFER_SIZE];
+
 //static const uint32_t CONF_SPI_TRANSFER_TIMEOUT_MS = 2500;
 
 extern "C" SPI_HandleTypeDef hspi4;
@@ -34,9 +40,11 @@ DWORD g_fatTime;
 
 SetParams currentState;
 
+////////////////////////////////////////////////////////////////////////////////
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == hspiADC) {
-		ADC_Measure_Finish(true);
+		ADC_DMA_TransferCompleted(true);
 		return;
 	}
 
@@ -46,7 +54,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
 
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
 	if (hspi == hspiADC) {
-		ADC_Measure_Finish(false);
+		ADC_DMA_TransferCompleted(false);
 		return;
 	}
 
@@ -75,10 +83,7 @@ void Command_GetState(Request &request, Response &response) {
 
 	response.getState.dinStates = Din_readDataInputs();
 
-	response.getState.ainValues[0] = ADC_samples[0];
-	response.getState.ainValues[1] = ADC_samples[1];
-	response.getState.ainValues[2] = ADC_samples[2];
-	response.getState.ainValues[3] = ADC_samples[3];
+	ADC_GetSamples(response.getState.ainValues);
 
 	response.getState.ainFaultStatus = ADC_faultStatus;
 
@@ -102,11 +107,13 @@ void Command_SetParams(Request &request, Response &response) {
 }
 
 void Command_DlogRecordingStart(Request &request, Response &response) {
-	DLOG_Start(request.dlogRecordingStart);
+	//DLOG_Start(request.dlogRecordingStart);
+	ADC_DLOG_Start(request, response);
 }
 
 void Command_DlogRecordingStop(Request &request, Response &response) {
-	DLOG_Stop();
+	//DLOG_Stop();
+	ADC_DLOG_Stop(request, response);
 }
 
 void Command_DiskDriveInitialize(Request &request, Response &response) {
@@ -171,6 +178,11 @@ extern "C" void setup() {
 
 // loop is called, of course, inside the loop from the main.c
 extern "C" void loop() {
+	static uint32_t lastTick;
+	uint32_t tick = HAL_GetTick();
+	g_debugVarDiff = tick - lastTick;
+	lastTick = tick;
+
 	// start SPI transfer
 	uint32_t input[(sizeof(Request) + 3) / 4 + 1];
 	uint32_t output[(sizeof(Request) + 3) / 4];
@@ -190,7 +202,7 @@ extern "C" void loop() {
 //			__enable_irq();
 //			break;
 //		}
-		DLOG_LoopWrite();
+		//DLOG_LoopWrite();
 	}
 
     Request &request = *(Request *)input;
@@ -210,6 +222,8 @@ extern "C" void loop() {
 			Command_DlogRecordingStart(request, response);
 		} else if (request.command == COMMAND_DLOG_RECORDING_STOP) {
 			Command_DlogRecordingStop(request, response);
+		} else if (request.command == COMMAND_DLOG_RECORDING_DATA) {
+			ADC_DLOG_Data(response);
 		} else if (request.command == COMMAND_DISK_DRIVE_INITIALIZE) {
 			Command_DiskDriveInitialize(request, response);
 		} else if (request.command == COMMAND_DISK_DRIVE_STATUS) {
@@ -229,7 +243,11 @@ extern "C" void loop() {
     	HAL_SPI_DeInit(hspiMaster);
 		SPI4_Init();
 
-		// tell the master that no command was handled
-    	response.command = COMMAND_NONE;
+		if (ADC_DLOG_started) {
+			ADC_DLOG_Data(response);
+		} else {
+			// tell the master that no command was handled
+    		response.command = COMMAND_NONE;
+		}
     }
 }
