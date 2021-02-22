@@ -8,6 +8,7 @@
 
 volatile uint32_t g_debugVarDiff_ADC1 = 0;
 volatile uint32_t g_debugVarDiff_ADC2 = 0;
+volatile uint32_t g_debugVarDiff_ADC3 = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -471,7 +472,7 @@ void ADC_DLOG_Data(Response &response) {
 			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, n);
 		} else {
 			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, ADC_DLOG_bufferSize - i);
-			memcpy(response.dlogRecordingData.buffer, ADC_buffer, j);
+			memcpy(response.dlogRecordingData.buffer + ADC_DLOG_bufferSize - i, ADC_buffer, j);
 		}
 	}
 
@@ -553,7 +554,7 @@ void ADC_AfterMeasure() {
 //
 
 inline void ADC_Measure() {
-	// RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
@@ -580,7 +581,7 @@ inline void ADC_Measure() {
 
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
-	// SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -588,7 +589,10 @@ inline void ADC_Measure() {
 // DMA version
 //
 
+int trt;
+
 inline void ADC_Measure_Start() {
+	trt = 1;
 	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	if (IS_24_BIT) {
@@ -604,6 +608,7 @@ void ADC_DMA_TransferCompleted(bool ok) {
 //	}
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	trt = 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -612,7 +617,12 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ADC_DRDY_Pin) {
 		if (ADC_measureStarted) {
             //ADC_Measure();
-			ADC_Measure_Start(); // DMA version
+			if (trt == 1) {
+				g_debugVarDiff_ADC3++;
+				//HAL_SPI_Abort(hspiADC);
+			} else {
+				ADC_Measure_Start(); // DMA version
+			}
 		}
 	}
 }
