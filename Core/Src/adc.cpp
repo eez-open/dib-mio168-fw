@@ -5,18 +5,14 @@
 
 #include "firmware.h"
 #include "utils.h"
+#include "dlog.h"
 
-volatile uint32_t g_debugVarDiff_ADC1 = 0;
-volatile uint32_t g_debugVarDiff_ADC2 = 0;
 volatile uint32_t g_debugVarDiff_ADC3 = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static uint8_t *ADC_buffer = g_buffer;
 static uint32_t ADC_DLOG_RECORD_SIZE_24_BIT = 14;
 static uint32_t ADC_DLOG_RECORD_SIZE_16_BIT = 10;
-static uint32_t ADC_bufferIndex = 0;
-static uint32_t ADC_bufferLastTransferredIndex = 0;
 
 extern "C" SPI_HandleTypeDef hspi3;
 SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
@@ -38,11 +34,6 @@ uint8_t ADC_rx[16];
 
 int ADC_ksps;
 #define IS_24_BIT (ADC_ksps < 32)
-
-bool ADC_DLOG_started;
-uint32_t ADC_DLOG_recordIndex = 0;
-uint32_t ADC_DLOG_bufferSize = 0;
-uint32_t ADC_DLOG_recordSize = 0;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -250,43 +241,7 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 	}
 
 	//
-	double f;
-
-	if (channelIndex < 2) {
-		if (mode == MEASURE_MODE_VOLTAGE) {
-			if (range == 0) {
-				f = 2.4; // +/- 2.4 V
-			} else if (range == 1) {
-				f = 48.0; // +/- 48 V
-			} else {
-				f = 240.0; // +/- 240 V
-			}
-		} else if (mode == MEASURE_MODE_CURRENT) {
-			f = 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
-		} else {
-			f = 0;
-		}
-	} else {
-		if (mode == MEASURE_MODE_VOLTAGE) {
-			if (range == 0) {
-				f = 2.4; // +/- 2.4 V
-			} else {
-				f = 12.0; // +/- 12 V
-			}
-		} else if (mode == MEASURE_MODE_CURRENT) {
-			if (range == 0) {
-				f = 0.024 * 50.0 / 39.0; // +/- 24 mA (rsense is 39 ohm (was 50 ohm), PGA is 2)
-			} else if (range == 1) {
-				f = 1.2 * 0.5 / 0.33; // +/- 1.2 A (rsense 0.33 ohm (was 0.5 ohm), PGA is 4)
-			} else {
-				f = 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
-			}
-		} else {
-			f = 0;
-		}
-	}
-
-	ADC_factor[channelIndex] = f;
+	ADC_factor[channelIndex] = getAinConversionFactor(channelIndex, mode, range);
 
 	g_adcMovingAverage[channelIndex].reset(numSamples);
 }
@@ -417,11 +372,6 @@ void ADC_SetParams(SetParams &newState) {
 void ADC_DLOG_Start(Request &request, Response &response) {
 	ADC_StopMeasuring();
 
-	response.dlogRecordingStart.conversionFactors[0] = ADC_factor[0];
-	response.dlogRecordingStart.conversionFactors[1] = ADC_factor[1];
-	response.dlogRecordingStart.conversionFactors[2] = ADC_factor[2];
-	response.dlogRecordingStart.conversionFactors[3] = ADC_factor[3];
-
 		 if (request.dlogRecordingStart.period < 1.0f / 32000) ADC_SetSampleRate(64);
 	else if (request.dlogRecordingStart.period < 1.0f / 16000) ADC_SetSampleRate(32);
 	else if (request.dlogRecordingStart.period < 1.0f /  8000) ADC_SetSampleRate(16);
@@ -430,11 +380,11 @@ void ADC_DLOG_Start(Request &request, Response &response) {
 	else if (request.dlogRecordingStart.period < 1.0f /  1000) ADC_SetSampleRate( 2);
 	else                                                       ADC_SetSampleRate( 1);
 
-	ADC_bufferIndex = 0;
-	ADC_bufferLastTransferredIndex = 0;
-	ADC_DLOG_recordIndex = 0;
-	ADC_DLOG_recordSize = IS_24_BIT ? ADC_DLOG_RECORD_SIZE_24_BIT : ADC_DLOG_RECORD_SIZE_16_BIT;
-	ADC_DLOG_bufferSize = (BUFFER_SIZE / ADC_DLOG_recordSize) * ADC_DLOG_recordSize;
+	DLOG_bufferIndex = 0;
+	DLOG_bufferLastTransferredIndex = 0;
+	DLOG_recordIndex = 0;
+	DLOG_recordSize = IS_24_BIT ? ADC_DLOG_RECORD_SIZE_24_BIT : ADC_DLOG_RECORD_SIZE_16_BIT;
+	DLOG_bufferSize = (BUFFER_SIZE / DLOG_recordSize) * DLOG_recordSize;
 
 	ADC_DLOG_started = true;
 
@@ -448,39 +398,6 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 	ADC_SetSampleRate(1);
 
 	ADC_StartMeasuring();
-}
-
-void ADC_DLOG_Data(Response &response) {
-	// TODO add check ADC_bufferLastTransferredIndex + ADC_BUFFER_SIZE_24_BIT > ADC_bufferIndex
-
-	response.dlogRecordingData.recordIndex = ADC_DLOG_recordIndex;
-
-	auto n = ADC_bufferIndex - ADC_bufferLastTransferredIndex;
-	g_debugVarDiff_ADC1 = n;
-	if (n > sizeof(response.dlogRecordingData.buffer)) {
-		n = sizeof(response.dlogRecordingData.buffer);
-	}
-
-	n /= ADC_DLOG_recordSize;
-	response.dlogRecordingData.numRecords = n;
-	n *= ADC_DLOG_recordSize;
-
-	if (n > 0) {
-		auto i = ADC_bufferLastTransferredIndex % ADC_DLOG_bufferSize;
-		auto j = (ADC_bufferLastTransferredIndex + n) % ADC_DLOG_bufferSize;
-		if (i < j) {
-			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, n);
-		} else {
-			memcpy(response.dlogRecordingData.buffer, ADC_buffer + i, ADC_DLOG_bufferSize - i);
-			memcpy(response.dlogRecordingData.buffer + ADC_DLOG_bufferSize - i, ADC_buffer, j);
-		}
-	}
-
-	ADC_bufferLastTransferredIndex += n;
-
-	ADC_DLOG_recordIndex += response.dlogRecordingData.numRecords;
-
-	g_debugVarDiff_ADC2 = response.dlogRecordingData.numRecords;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -509,11 +426,11 @@ void ADC_AfterMeasure() {
 	rx += 3;
 
 	if (ADC_DLOG_started) {
-		auto p = ADC_buffer + ADC_bufferIndex % ADC_DLOG_bufferSize;
+		auto p = DLOG_buffer + DLOG_bufferIndex % DLOG_bufferSize;
 
-		memcpy(p, rx, ADC_DLOG_recordSize - 2);
+		memcpy(p, rx, DLOG_recordSize - 2);
 
-		p[ADC_DLOG_recordSize - 2] =
+		p[DLOG_recordSize - 2] =
 			(READ_PIN(DIN0_GPIO_Port, DIN0_Pin) << 0) |
 			(READ_PIN(DIN1_GPIO_Port, DIN1_Pin) << 1) |
 			(READ_PIN(DIN2_GPIO_Port, DIN2_Pin) << 2) |
@@ -523,9 +440,9 @@ void ADC_AfterMeasure() {
 			(READ_PIN(DIN6_GPIO_Port, DIN6_Pin) << 6) |
 			(READ_PIN(DIN7_GPIO_Port, DIN7_Pin) << 7);
 
-		p[ADC_DLOG_recordSize - 1] = currentState.doutStates;
+		p[DLOG_recordSize - 1] = currentState.doutStates;
 
-		ADC_bufferIndex += ADC_DLOG_recordSize;
+		DLOG_bufferIndex += DLOG_recordSize;
 	}
 
 	int32_t ADC_ch[4];
@@ -554,7 +471,7 @@ void ADC_AfterMeasure() {
 //
 
 inline void ADC_Measure() {
-	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
@@ -581,7 +498,7 @@ inline void ADC_Measure() {
 
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
-	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -589,11 +506,11 @@ inline void ADC_Measure() {
 // DMA version
 //
 
-int trt;
+int g_DMA;
 
 inline void ADC_Measure_Start() {
-	trt = 1;
-	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	g_DMA = 1;
+	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	if (IS_24_BIT) {
 		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 16);
@@ -607,8 +524,8 @@ void ADC_DMA_TransferCompleted(bool ok) {
 		ADC_AfterMeasure();
 //	}
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-	trt = 0;
+	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	g_DMA = 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -617,7 +534,7 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ADC_DRDY_Pin) {
 		if (ADC_measureStarted) {
             //ADC_Measure();
-			if (trt == 1) {
+			if (g_DMA == 1) {
 				g_debugVarDiff_ADC3++;
 				//HAL_SPI_Abort(hspiADC);
 			} else {

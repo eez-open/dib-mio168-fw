@@ -15,6 +15,7 @@
 #include "dac7760.h"
 #include "dac7563.h"
 #include "pwm.h"
+#include "dlog.h"
 
 #include "din_dlog.h"
 #include "utils.h"
@@ -107,13 +108,19 @@ void Command_SetParams(Request &request, Response &response) {
 }
 
 void Command_DlogRecordingStart(Request &request, Response &response) {
-	//DLOG_Start(request.dlogRecordingStart);
-	ADC_DLOG_Start(request, response);
+	if ((request.dlogRecordingStart.resources >> 16) > 0) {
+		ADC_DLOG_Start(request, response);
+	} else {
+		DIN_DLOG_Start(request.dlogRecordingStart);
+	}
 }
 
 void Command_DlogRecordingStop(Request &request, Response &response) {
-	//DLOG_Stop();
-	ADC_DLOG_Stop(request, response);
+	if (ADC_DLOG_started) {
+		ADC_DLOG_Stop(request, response);
+	} else {
+		DIN_DLOG_Stop();
+	}
 }
 
 void Command_DiskDriveInitialize(Request &request, Response &response) {
@@ -202,7 +209,7 @@ extern "C" void loop() {
 //			__enable_irq();
 //			break;
 //		}
-		//DLOG_LoopWrite();
+		//DIN_DLOG_LoopWrite();
 	}
 
     Request &request = *(Request *)input;
@@ -223,7 +230,7 @@ extern "C" void loop() {
 		} else if (request.command == COMMAND_DLOG_RECORDING_STOP) {
 			Command_DlogRecordingStop(request, response);
 		} else if (request.command == COMMAND_DLOG_RECORDING_DATA) {
-			ADC_DLOG_Data(response);
+			DLOG_Data(response);
 		} else if (request.command == COMMAND_DISK_DRIVE_INITIALIZE) {
 			Command_DiskDriveInitialize(request, response);
 		} else if (request.command == COMMAND_DISK_DRIVE_STATUS) {
@@ -243,8 +250,8 @@ extern "C" void loop() {
     	HAL_SPI_DeInit(hspiMaster);
 		SPI4_Init();
 
-		if (ADC_DLOG_started) {
-			ADC_DLOG_Data(response);
+		if (ADC_DLOG_started || DIN_DLOG_started) {
+			DLOG_Data(response);
 		} else {
 			// tell the master that no command was handled
     		response.command = COMMAND_NONE;

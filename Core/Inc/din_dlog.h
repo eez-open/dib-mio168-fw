@@ -1,8 +1,8 @@
 #pragma once
 
-void DLOG_Start(DlogRecordingStart &dlogRecordingStart);
-void DLOG_LoopWrite();
-void DLOG_Stop();
+void DIN_DLOG_Start(DlogRecordingStart &dlogRecordingStart);
+void DIN_DLOG_LoopWrite();
+void DIN_DLOG_Stop();
 
 extern bool g_fileSystemIsMounted;
 extern DlogState dlogState;

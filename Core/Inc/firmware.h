@@ -144,10 +144,6 @@ struct Response {
         } setParams;
 
         struct {
-            float conversionFactors[4];
-        } dlogRecordingStart;
-
-        struct {
             uint32_t recordIndex;
             uint16_t numRecords;
             uint8_t buffer[1024];
@@ -176,6 +172,40 @@ struct Response {
         } diskDriveIoctl;
 	};
 };
+
+inline double getAinConversionFactor(uint8_t channelIndex, uint8_t mode, uint8_t range) {
+	if (channelIndex < 2) {
+		if (mode == MEASURE_MODE_VOLTAGE) {
+			if (range == 0) {
+				return 2.4; // +/- 2.4 V
+			}
+            if (range == 1) {
+				return 48.0; // +/- 48 V
+			}
+			return 240.0; // +/- 240 V
+		}
+        if (mode == MEASURE_MODE_CURRENT) {
+			return 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
+		}
+	} else {
+		if (mode == MEASURE_MODE_VOLTAGE) {
+			if (range == 0) {
+				return 2.4; // +/- 2.4 V
+			}
+			return 12.0; // +/- 12 V
+		}
+        if (mode == MEASURE_MODE_CURRENT) {
+			if (range == 0) {
+				return 0.024 * 50.0 / 39.0; // +/- 24 mA (rsense is 39 ohm (was 50 ohm), PGA is 2)
+			}
+            if (range == 1) {
+				return 1.2 * 0.5 / 0.33; // +/- 1.2 A (rsense 0.33 ohm (was 0.5 ohm), PGA is 4)
+			}
+            return 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
+		}
+	}
+    return 0;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 

@@ -4,18 +4,20 @@
 #include "fatfs.h"
 
 #include "firmware.h"
-#include "dlog_file.h"
 #include "utils.h"
+#include "dlog.h"
+#include "dlog_file.h"
 
 using namespace eez;
 
 extern "C" TIM_HandleTypeDef htim6; // for DIN's data logging
-
-DlogState dlogState;
-
 uint8_t g_dinResources;
 uint8_t g_doutResources;
 
+DlogState dlogState;
+bool g_fileSystemIsMounted = false;
+
+#if 0
 uint8_t *g_writerBuffer = g_buffer;
 static const uint32_t WRITER_BUFFER_SIZE = 48 * 1024;
 dlog_file::Writer g_writer(g_writerBuffer, WRITER_BUFFER_SIZE);
@@ -28,13 +30,14 @@ uint32_t g_numSamples;
 uint32_t g_maxNumSamples;
 uint32_t g_lastSavedBufferIndex;
 
-bool g_fileSystemIsMounted = false;
 FIL g_file;
 
 uint8_t readDataInputs();
+#endif
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim6) {
+#if 0
 		if (g_numSamples < g_maxNumSamples) {
 			// this is valid sample
 			g_writer.writeBit(1);
@@ -61,9 +64,39 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
 			g_numSamples++;
 		}
+#endif
+
+		static bool x;
+
+		if (x) {
+			RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+		} else {
+			SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+		}
+
+		x = !x;
+
+		if (DIN_DLOG_started) {
+			if (g_dinResources) {
+				*(DLOG_buffer + DLOG_bufferIndex++ % DLOG_bufferSize) =
+					(READ_PIN(DIN0_GPIO_Port, DIN0_Pin) << 0) |
+					(READ_PIN(DIN1_GPIO_Port, DIN1_Pin) << 1) |
+					(READ_PIN(DIN2_GPIO_Port, DIN2_Pin) << 2) |
+					(READ_PIN(DIN3_GPIO_Port, DIN3_Pin) << 3) |
+					(READ_PIN(DIN4_GPIO_Port, DIN4_Pin) << 4) |
+					(READ_PIN(DIN5_GPIO_Port, DIN5_Pin) << 5) |
+					(READ_PIN(DIN6_GPIO_Port, DIN6_Pin) << 6) |
+					(READ_PIN(DIN7_GPIO_Port, DIN7_Pin) << 7);
+			}
+
+			if (g_doutResources) {
+				*(DLOG_buffer + DLOG_bufferIndex++ % DLOG_bufferSize) = currentState.doutStates;
+			}
+		}
 	}
 }
 
+#if 0
 void DLOG_FillParameters(DlogRecordingStart &dlogRecordingStart, dlog_file::Parameters &dlogFileParameters) {
 	memset(&dlogFileParameters, 0, sizeof(dlogFileParameters));
 
@@ -72,7 +105,7 @@ void DLOG_FillParameters(DlogRecordingStart &dlogRecordingStart, dlog_file::Para
     dlogFileParameters.xAxis.range.min = 0;
     dlogFileParameters.xAxis.range.max = dlogRecordingStart.duration;
 
-    dlogFileParameters.yAxisScale = dlog_file::SCALE_LINEAR;
+    dlogFileParameters.yAxisScaleType = dlog_file::SCALE_LINEAR;
 
     g_dinResources = dlogRecordingStart.resources;
     for (int i = 0; i < 8; i++) {
@@ -223,8 +256,10 @@ void DLOG_CloseFile() {
 	f_mount(NULL, 0, 0);
 	g_fileSystemIsMounted = false;
 }
+#endif
 
-void DLOG_Start(DlogRecordingStart &dlogRecordingStart) {
+void DIN_DLOG_Start(DlogRecordingStart &dlogRecordingStart) {
+#if 0
 	auto result = DLOG_StartFile(dlogRecordingStart);
 	if (result != FR_OK) {
 		DLOG_CloseFile();
@@ -244,9 +279,25 @@ void DLOG_Start(DlogRecordingStart &dlogRecordingStart) {
 
 		HAL_TIM_Base_Start_IT(&htim6);
 	}
+#endif
+
+    g_dinResources = dlogRecordingStart.resources;
+    g_doutResources = dlogRecordingStart.resources >> 8;
+
+	DLOG_bufferIndex = 0;
+	DLOG_bufferLastTransferredIndex = 0;
+	DLOG_recordIndex = 0;
+	DLOG_recordSize = g_dinResources && g_doutResources ? 2 : 1;
+	DLOG_bufferSize = (BUFFER_SIZE / DLOG_recordSize) * DLOG_recordSize;
+
+	DIN_DLOG_started = true;
+
+	TIM6->ARR = (uint16_t)(dlogRecordingStart.period * 10000000) - 1; // convert to microseconds
+	HAL_TIM_Base_Start_IT(&htim6);
 }
 
-void DLOG_LoopWrite() {
+void DIN_DLOG_LoopWrite() {
+#if 0
 	if (g_fileSystemIsMounted) {
 		auto result = DLOG_WriteFile(false);
 
@@ -259,11 +310,15 @@ void DLOG_LoopWrite() {
 			dlogState.state = DLOG_STATE_FINISH_RESULT_OK;
 		}
 	}
+#endif
 }
 
-void DLOG_Stop() {
+void DIN_DLOG_Stop() {
 	HAL_TIM_Base_Stop_IT(&htim6);
 
+	DIN_DLOG_started = false;
+
+#if 0
 	// flush buffer
 	uint32_t result = DLOG_STATE_FINISH_RESULT_OK;
 	do {
@@ -278,4 +333,5 @@ void DLOG_Stop() {
 	dlogState.state = result;
 
 	DLOG_CloseFile();
+#endif
 }
