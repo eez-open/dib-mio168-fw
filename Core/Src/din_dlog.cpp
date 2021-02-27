@@ -66,15 +66,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		}
 #endif
 
-		static bool x;
-
-		if (x) {
-			RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-		} else {
-			SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-		}
-
-		x = !x;
+//		static bool x;
+//
+//		if (x) {
+//			RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+//		} else {
+//			SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+//		}
+//
+//		x = !x;
 
 		if (DIN_DLOG_started) {
 			if (g_dinResources) {

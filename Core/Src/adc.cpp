@@ -510,7 +510,7 @@ int g_DMA;
 
 inline void ADC_Measure_Start() {
 	g_DMA = 1;
-	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	if (IS_24_BIT) {
 		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 16);
@@ -524,7 +524,7 @@ void ADC_DMA_TransferCompleted(bool ok) {
 		ADC_AfterMeasure();
 //	}
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	g_DMA = 0;
 }
 
