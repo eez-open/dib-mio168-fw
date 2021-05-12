@@ -9,6 +9,8 @@
 
 volatile uint32_t g_debugVarDiff_ADC3 = 0;
 
+static const int DEFAULT_SAMPLE_RATE_KSPS = 16;
+
 ////////////////////////////////////////////////////////////////////////////////
 
 static uint32_t ADC_DLOG_RECORD_SIZE_24_BIT = 14;
@@ -110,11 +112,11 @@ void powerCalc(int32_t ain1_ADC, int32_t ain2_ADC) {
 	g_voltBuffer[g_bufferIndex] = volt;
 	g_currBuffer[g_bufferIndex] = curr;
 	g_bufferIndex++;
-	if (g_bufferIndex == n) {
+	if (g_bufferIndex >= n) {
 		g_bufferIndex = 0;
 
 		g_periodCounter++;
-		if (g_periodCounter == g_timeWindow) {
+		if (g_periodCounter >= g_timeWindow) {
 			g_activePower = float(g_activePowerAcc / (g_timeWindow * n));
 			g_reactivePower = float(g_reactivePowerAcc / (g_timeWindow * n));
 			g_voltRMS = float(sqrt(g_voltRMSAcc / (g_timeWindow * n)));
@@ -144,6 +146,13 @@ void powerCalc(int32_t ain1_ADC, int32_t ain2_ADC) {
 #define SPI_WAIT_RX(SPIx)    while (!(SPIx->SR & SPI_FLAG_RXNE))
 #define SPI1_DR_8bit(SPIx) (*(__IO uint8_t *)((uint32_t)&(SPIx->DR)))
 
+inline uint8_t ADC_SPI_TransferReceiveLL(uint8_t data){
+	SPI_WAIT_TX(SPI3);
+	SPI1_DR_8bit(SPI3) = data;
+	SPI_WAIT_RX(SPI3);
+	return SPI1_DR_8bit(SPI3);
+}
+
 inline uint8_t ADC_SPI_TransferLL(uint8_t data){
 	SPI_WAIT_TX(SPI3);
 	SPI1_DR_8bit(SPI3) = data;
@@ -155,9 +164,9 @@ inline uint8_t ADC_SPI_TransferLL(uint8_t data){
 
 void ADC_SendSimpleCommand(uint8_t cmd) {
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	delayMicroseconds(5);
+	delayMicroseconds(10);
 	ADC_SPI_TransferLL(cmd);
-	delayMicroseconds(5);
+	delayMicroseconds(10);
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 }
 
@@ -198,7 +207,7 @@ uint8_t ADC_ReadReg(uint8_t reg) {
 	delayMicroseconds(5);
 	ADC_SPI_TransferLL(0); // read 1 register
 	delayMicroseconds(5);
-	uint8_t value = ADC_SPI_TransferLL(0);
+	uint8_t value = ADC_SPI_TransferReceiveLL(0);
 	delayMicroseconds(5);
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	return value;
@@ -595,7 +604,7 @@ void ADC_Setup() {
 
 	////////////////////////////////////////
 
-	ADC_SetSampleRate(16);
+	ADC_SetSampleRate(DEFAULT_SAMPLE_RATE_KSPS);
 
 	ADC_WriteReg(0x02, 0b1111'0010); // CONFIG2
 	ADC_WriteReg(0x03, 0b1100'0000); // CONFIG3
@@ -738,7 +747,7 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 	ADC_StopMeasuring();
 
 	ADC_DLOG_started = false;
-	ADC_SetSampleRate(16);
+	ADC_SetSampleRate(DEFAULT_SAMPLE_RATE_KSPS);
 
 	ADC_StartMeasuring();
 }
@@ -804,10 +813,15 @@ void ADC_AfterMeasure() {
 		ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
 	}
 
-	g_adcMovingAverage[0](ADC_ch[0]);
-	g_adcMovingAverage[1](ADC_ch[1]);
-	g_adcMovingAverage[2](ADC_ch[2]);
-	g_adcMovingAverage[3](ADC_ch[3]);
+	static int g_adcMovingAverageCounter;
+	if (++g_adcMovingAverageCounter >= ADC_ksps) {
+		g_adcMovingAverageCounter = 0;
+
+		g_adcMovingAverage[0](ADC_ch[0]);
+		g_adcMovingAverage[1](ADC_ch[1]);
+		g_adcMovingAverage[2](ADC_ch[2]);
+		g_adcMovingAverage[3](ADC_ch[3]);
+	}
 
 	if (g_afeVersion == 3) {
 		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOG, GPIO_PIN_15) << 1);
@@ -822,7 +836,7 @@ void ADC_AfterMeasure() {
 //
 
 inline void ADC_Measure() {
-	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	// RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
@@ -830,26 +844,26 @@ inline void ADC_Measure() {
 
 	ADC_SPI_TransferLL(0x12);
 	if (IS_24_BIT) {
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
 
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
 	} else {
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
 
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
-		*rx++ = ADC_SPI_TransferLL(0); *rx++ = ADC_SPI_TransferLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
+		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
 	}
 
 	ADC_AfterMeasure();
 
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
-	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	// SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -861,7 +875,7 @@ int g_DMA;
 
 inline void ADC_Measure_Start() {
 	g_DMA = 1;
-	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	// RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 	if (IS_24_BIT) {
 		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 16);
@@ -875,7 +889,7 @@ void ADC_DMA_TransferCompleted(bool ok) {
 		ADC_AfterMeasure();
 //	}
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	// SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	g_DMA = 0;
 }
 
