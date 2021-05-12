@@ -3,6 +3,8 @@
 static const size_t MAX_PATH_LENGTH = 255;
 static const size_t CHANNEL_LABEL_MAX_LENGTH = 5;
 
+extern uint8_t g_afeVersion;
+
 enum MeasureMode {
 	MEASURE_MODE_CURRENT,
 	MEASURE_MODE_VOLTAGE
@@ -57,7 +59,11 @@ struct SetParams {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
         float nplc; // from 0 to 25
-	} ain[4];
+        float p1CalX;
+        float p1CalY;
+        float p2CalX;
+        float p2CalY;
+    } ain[4];
 
     uint8_t powerLineFrequency; // 50 or 60
 
@@ -136,6 +142,11 @@ struct Response {
             uint8_t dinStates;
             float ainValues[4];
             uint16_t ainFaultStatus;
+            uint8_t ainDiagStatus;
+            float activePower;
+            float reactivePower;
+            float voltRMS;
+            float currRMS;
             DlogState dlogState;
         } getState;
 
@@ -173,37 +184,79 @@ struct Response {
 	};
 };
 
-inline double getAinConversionFactor(uint8_t channelIndex, uint8_t mode, uint8_t range) {
-	if (channelIndex < 2) {
-		if (mode == MEASURE_MODE_VOLTAGE) {
-			if (range == 0) {
-				return 2.4; // +/- 2.4 V
-			}
-            if (range == 1) {
-				return 48.0; // +/- 48 V
-			}
-			return 240.0; // +/- 240 V
-		}
-        if (mode == MEASURE_MODE_CURRENT) {
-			return 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
-		}
-	} else {
-		if (mode == MEASURE_MODE_VOLTAGE) {
-			if (range == 0) {
-				return 2.4; // +/- 2.4 V
-			}
-			return 12.0; // +/- 12 V
-		}
-        if (mode == MEASURE_MODE_CURRENT) {
-			if (range == 0) {
-				return 0.024 * 50.0 / 39.0; // +/- 24 mA (rsense is 39 ohm (was 50 ohm), PGA is 2)
-			}
-            if (range == 1) {
-				return 1.2 * 0.5 / 0.33; // +/- 1.2 A (rsense 0.33 ohm (was 0.5 ohm), PGA is 4)
-			}
-            return 20.0; // +/- 10 A (rsense is 0.01 ohm, PGA is 12 => 2.4 / 0.01 / 16 = 20 A)
-		}
-	}
+inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, uint8_t mode, uint8_t range) {
+    if (afeVersion == 1) {
+        if (channelIndex < 2) {
+            if (mode == MEASURE_MODE_VOLTAGE) {
+                if (range == 0) {
+                    return 2.4; // +/- 2.4 V
+                }
+                if (range == 1) {
+                    return 48.0; // +/- 48 V
+                }
+                return 240.0; // +/- 240 V
+            }
+            if (mode == MEASURE_MODE_CURRENT) {
+                return 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
+            }
+        } else {
+            if (mode == MEASURE_MODE_VOLTAGE) {
+                if (range == 0) {
+                    return 2.4; // +/- 2.4 V
+                }
+                return 12.0; // +/- 12 V
+            }
+            if (mode == MEASURE_MODE_CURRENT) {
+                if (range == 0) {
+                    return 2.4 / 33 / 2; // +/- 24 mA (33 ohm, PGA is 2)
+                }
+                if (range == 1) {
+                    return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)
+                }
+                return 2.4 / 0.01 / 12; // +/- 10 A (0.01 ohm, PGA is 12)
+            }
+        }
+    } else if (afeVersion == 3) {
+        if (channelIndex == 0) {
+            if (range == 0) {
+                return 50.0 * 2.4 / 1.8; // +/- 50 V (50 V is 1.8 V)
+            }
+            return 450.0 * 2.4 / 1.86; // +/- 450 V (450 V is 1.86 V)
+        } else if (channelIndex == 1) {
+            if (range == 0) {
+                return 2.4 / 1.886; // +/- 1 A (1A is 1.886 V, PGA is 1)
+            }
+            return 10.0 * 2.4 / 0.82 / 2; // +/- 10 A (10 A is 0.82 V, PGA is 2)
+        } else if (channelIndex == 2) {
+            if (mode == MEASURE_MODE_VOLTAGE) {
+                if (range == 0) {
+                    return 2.4; // +/- 2.4 V
+                }
+                if (range == 1) {
+                    return 48.0; // +/- 48.0 V
+                }
+                return 240.0; // +/- 240 V
+            }
+
+            return 0.048; // +/- 48 mV
+        } else {
+            if (mode == MEASURE_MODE_VOLTAGE) {
+                if (range == 0) {
+                    return 2.4; // +/- 2.4 V
+                }
+                return 12.0; // +/- 12 V
+            }
+            if (mode == MEASURE_MODE_CURRENT) {
+                if (range == 0) {
+                    return 2.4 / 33 / 2; // +/- 24 mA (33 ohm, PGA is 2)
+                }
+                if (range == 1) {
+                    return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)
+                }
+                return 2.4 / 0.01 / 12; // +/- 10 A (0.01 ohm, PGA is 12)
+            }
+        }
+    }
     return 0;
 }
 

@@ -11,7 +11,7 @@
                     					
                     <stringMacro name="FW_VER_MAJOR" type="VALUE_TEXT" value="0"/>
                     					
-                    <stringMacro name="FW_VER_MINOR" type="VALUE_TEXT" value="9"/>
+                    <stringMacro name="FW_VER_MINOR" type="VALUE_TEXT" value="10"/>
                     				
                 </macros>
                 				

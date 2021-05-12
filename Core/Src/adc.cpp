@@ -19,6 +19,7 @@ SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 
 float ADC_samples[4];
 uint16_t ADC_faultStatus;
+uint8_t ADC_diagStatus;
 
 static const uint64_t ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES = 25 * (1000 / 50);
 static MovingAverage<int32_t, int64_t, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
@@ -27,6 +28,13 @@ static uint8_t ADC_pga[4];
 
 static double ADC_factor[4];
 
+static struct {
+	float p1CalX;
+	float p1CalY;
+	float p2CalX;
+	float p2CalY;
+} ADC_calPoints[4];
+
 volatile static bool ADC_measureStarted = false;
 
 uint8_t ADC_tx[16] = { 0x12 };
@@ -34,6 +42,101 @@ uint8_t ADC_rx[16];
 
 int ADC_ksps;
 #define IS_24_BIT (ADC_ksps < 32)
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Power calc
+//
+
+static float g_voltBuffer[64 * 1000 / 50];
+static float g_currBuffer[64 * 1000 / 50];
+
+static int g_bufferIndex;
+
+static int g_timeWindow = 10;
+static int g_periodCounter = 0;
+
+static double g_activePowerAcc;
+static double g_reactivePowerAcc;
+static double g_voltRMSAcc;
+static double g_currRMSAcc;
+
+float g_activePower;
+float g_reactivePower;
+float g_voltRMS;
+float g_currRMS;
+
+float remap(float x, float x1, float y1, float x2, float y2) {
+    return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+}
+
+void powerCalcReset() {
+	for (unsigned i = 0; i < sizeof(g_voltBuffer) / sizeof(float); i++) {
+		g_voltBuffer[i] = 0;
+		g_currBuffer[i] = 0;
+	}
+
+	g_bufferIndex = 0;
+	g_periodCounter = 0;
+
+	g_activePowerAcc = 0;
+	g_reactivePowerAcc = 0;
+	g_voltRMSAcc = 0;
+	g_currRMSAcc = 0;
+
+	g_activePower = 0;
+	g_reactivePower = 0;
+	g_voltRMS = 0;
+	g_currRMS = 0;
+}
+
+void powerCalc(int32_t ain1_ADC, int32_t ain2_ADC) {
+	float volt;
+	float curr;
+
+	if (IS_24_BIT) {
+		volt = float(ADC_factor[0] * ain1_ADC / (1 << 23));
+		curr = float(ADC_factor[1] * ain2_ADC / (1 << 23));
+	} else {
+		volt = float(ADC_factor[0] * ain1_ADC / (1 << 15));
+		curr = float(ADC_factor[1] * ain2_ADC / (1 << 15));
+	}
+
+	volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
+	curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+
+	int n = ADC_ksps * 1000 / 50;
+
+	g_voltBuffer[g_bufferIndex] = volt;
+	g_currBuffer[g_bufferIndex] = curr;
+	g_bufferIndex++;
+	if (g_bufferIndex == n) {
+		g_bufferIndex = 0;
+
+		g_periodCounter++;
+		if (g_periodCounter == g_timeWindow) {
+			g_activePower = float(g_activePowerAcc / (g_timeWindow * n));
+			g_reactivePower = float(g_reactivePowerAcc / (g_timeWindow * n));
+			g_voltRMS = float(sqrt(g_voltRMSAcc / (g_timeWindow * n)));
+			g_currRMS = float(sqrt(g_currRMSAcc / (g_timeWindow * n)));
+
+			g_activePowerAcc = 0;
+			g_reactivePowerAcc = 0;
+			g_voltRMSAcc = 0;
+			g_currRMSAcc = 0;
+
+			g_periodCounter = 0;
+		}
+	}
+
+	g_activePowerAcc += volt * curr;
+
+	auto t = g_bufferIndex - n / 4;
+	g_reactivePowerAcc = g_voltBuffer[t >= 0 ? t : t + n] * curr;
+
+	g_voltRMSAcc += volt * volt;
+	g_currRMSAcc += curr * curr;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -128,14 +231,22 @@ void ADC_WriteReg(uint8_t reg, uint8_t val) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const uint32_t RELAY_DELAY = 10;
+
+static int ADC_Pin_CurrentState[16] = {
+	// undefined
+	-1, -1, -1, -1,
+	-1, -1, -1, -1,
+	-1, -1, -1, -1,
+	-1, -1, -1, -1
+};
+
+static int ADC_Relay_CurrentState[4] = {
+	// undefined
+	-1, -1, -1, -1
+};
+
 void ADC_Pin_SetState(int pinIndex, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, bool pinState) {
-	static int ADC_Pin_CurrentState[16] = {
-		// undefined
-		-1, -1, -1, -1,
-		-1, -1, -1, -1,
-		-1, -1, -1, -1,
-		-1, -1, -1, -1
-	};
 
 	int state = pinState ? 1 : 0;
 
@@ -150,46 +261,105 @@ void ADC_Pin_SetState(int pinIndex, GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin, bool
 }
 
 void ADC_Relay_SetState(
-	int relayIndex,
-	GPIO_TypeDef* GPIOx_Set, uint16_t GPIO_Pin_Set,
-	GPIO_TypeDef* GPIOx_Reset, uint16_t GPIO_Pin_Reset,
-	bool relayState
+	int i, GPIO_TypeDef* iSetPort, uint16_t iSetPin, GPIO_TypeDef* iResetPort, uint16_t iResetPin, int iState
 ) {
-	static int ADC_Relay_CurrentState[4] = {
-		// undefined
-		-1, -1, -1, -1
-	};
-
-	int state = relayState ? 1 : 0;
-
-	if (ADC_Relay_CurrentState[relayIndex] != state) {
-		if (state) {
-			SET_PIN(GPIOx_Set, GPIO_Pin_Set);
-			HAL_Delay(40);
-			RESET_PIN(GPIOx_Set, GPIO_Pin_Set);
-		} else {
-			SET_PIN(GPIOx_Reset, GPIO_Pin_Reset);
-			HAL_Delay(40);
-			RESET_PIN(GPIOx_Reset, GPIO_Pin_Reset);
+	if (ADC_Relay_CurrentState[i] != iState) {
+		if (ADC_Relay_CurrentState[i] != iState) {
+			if (iState) {
+				SET_PIN(iSetPort, iSetPin);
+			} else {
+				SET_PIN(iResetPort, iResetPin);
+			}
 		}
 
-		ADC_Relay_CurrentState[relayIndex] = state;
+		HAL_Delay(RELAY_DELAY);
+
+		if (ADC_Relay_CurrentState[i] != iState) {
+			if (iState) {
+				RESET_PIN(iSetPort, iSetPin);
+			} else {
+				RESET_PIN(iResetPort, iResetPin);
+			}
+			ADC_Relay_CurrentState[i] = iState;
+		}
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
+void ADC_Relays_SetState(
+	int i, GPIO_TypeDef* iSetPort, uint16_t iSetPin, GPIO_TypeDef* iResetPort, uint16_t iResetPin, int iState,
+	int j, GPIO_TypeDef* jSetPort, uint16_t jSetPin, GPIO_TypeDef* jResetPort, uint16_t jResetPin, int jState
+) {
+	if (ADC_Relay_CurrentState[i] != iState || ADC_Relay_CurrentState[j] != jState) {
+		if (ADC_Relay_CurrentState[i] != iState) {
+			if (iState) {
+				SET_PIN(iSetPort, iSetPin);
+			} else {
+				SET_PIN(iResetPort, iResetPin);
+			}
+		}
 
-void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16_t numSamples) {
+		if (ADC_Relay_CurrentState[j] != jState) {
+			if (jState) {
+				SET_PIN(jSetPort, jSetPin);
+			} else {
+				SET_PIN(jResetPort, jResetPin);
+			}
+		}
+
+		HAL_Delay(RELAY_DELAY);
+
+		if (ADC_Relay_CurrentState[i] != iState) {
+			if (iState) {
+				RESET_PIN(iSetPort, iSetPin);
+			} else {
+				RESET_PIN(iResetPort, iResetPin);
+			}
+			ADC_Relay_CurrentState[i] = iState;
+		}
+
+		if (ADC_Relay_CurrentState[j] != jState) {
+			if (jState) {
+				RESET_PIN(jSetPort, jSetPin);
+			} else {
+				RESET_PIN(jResetPort, jResetPin);
+			}
+			ADC_Relay_CurrentState[j] = jState;
+		}
+	}
+}
+
+void ADC_UpdateChannel(
+	uint8_t channelIndex, uint8_t mode, uint8_t range, uint16_t numSamples,
+	float p1CalX, float p1CalY, float p2CalX, float p2CalY
+) {
 	uint8_t pga = 0b0001'0000;
 
-	if (channelIndex == 2 || channelIndex == 3) {
-		if (mode == MEASURE_MODE_CURRENT) {
-			if (range == 0) {
+	if (g_afeVersion == 1) {
+		if (channelIndex == 2 || channelIndex == 3) {
+			if (mode == MEASURE_MODE_CURRENT) {
+				if (range == 0) {
+					pga = 0b0010'0000; // x2
+				} else if (range == 1) {
+					pga = 0b0100'0000; // x4
+				} else {
+					pga = 0b0110'0000; // x12
+				}
+			}
+		}
+	} else if (g_afeVersion == 3) {
+		if (channelIndex == 1) {
+			if (range == 1) {
 				pga = 0b0010'0000; // x2
-			} else if (range == 1) {
-				pga = 0b0100'0000; // x4
-			} else {
-				pga = 0b0110'0000; // x12
+			}
+		} else if (channelIndex == 3) {
+			if (mode == MEASURE_MODE_CURRENT) {
+				if (range == 0) {
+					pga = 0b0010'0000; // x2
+				} else if (range == 1) {
+					pga = 0b0100'0000; // x4
+				} else {
+					pga = 0b0110'0000; // x12
+				}
 			}
 		}
 	}
@@ -198,52 +368,195 @@ void ADC_UpdateChannel(uint8_t channelIndex, uint8_t mode, uint8_t range, uint16
 
 	ADC_WriteReg(0x05 + channelIndex, 0b0000'0000 | pga);
 
-	if (channelIndex == 0) {
-		ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(1, USEL10_1_GPIO_Port, USEL10_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
-		ADC_Pin_SetState(3, ISEL_1_GPIO_Port, ISEL_1_Pin, mode == MEASURE_MODE_CURRENT);
-	} else if (channelIndex == 1) {
-		ADC_Pin_SetState(4, USEL1_2_GPIO_Port, USEL1_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(5, USEL10_2_GPIO_Port, USEL10_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(6, USEL100_2_GPIO_Port, USEL100_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
-		ADC_Pin_SetState(7, ISEL_2_GPIO_Port, ISEL_2_Pin, mode == MEASURE_MODE_CURRENT);
-	} else if (channelIndex == 2) {
-		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
-		// Current 1A   : ISEL_MID, ISEL10A, ISEL
-		// Current 10A  : ISEL_MID
+	if (g_afeVersion == 1) {
+		if (channelIndex == 0) {
+			ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+			ADC_Pin_SetState(1, USEL20_1_GPIO_Port, USEL20_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+			ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
+			ADC_Pin_SetState(3, ISEL_1_GPIO_Port, ISEL_1_Pin, mode == MEASURE_MODE_CURRENT);
+		} else if (channelIndex == 1) {
+			ADC_Pin_SetState(4, USEL1_2_GPIO_Port, USEL1_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
+			ADC_Pin_SetState(5, USEL20_2_GPIO_Port, USEL20_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
+			ADC_Pin_SetState(6, USEL100_2_GPIO_Port, USEL100_2_Pin, mode == MEASURE_MODE_VOLTAGE && range == 2);
+			ADC_Pin_SetState(7, ISEL_2_GPIO_Port, ISEL_2_Pin, mode == MEASURE_MODE_CURRENT);
+		} else if (channelIndex == 2) {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 0) {
+					ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, true);
+					ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, false);
+				} else {
+					ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, true);
+					ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, false);
+				}
 
-		ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(9, USEL10_3_GPIO_Port, USEL10_3_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, mode == MEASURE_MODE_CURRENT && range == 0);
-		ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, mode == MEASURE_MODE_CURRENT && (range == 1 || range == 2));
+				ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
+				ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, false);
+				
+				ADC_Relays_SetState(
+					0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin, 1,
+					1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin, 0
+				);
+			} else {
+				ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, false);
+				ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, false);
+				if (range == 0) {
+					ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, true);
+					ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, false);
 
-		ADC_Relay_SetState(0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin,
-			mode == MEASURE_MODE_VOLTAGE || (mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1)));
+					ADC_Relays_SetState(
+						0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin, 1,
+						1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin, 1
+					);
+				} else if (range == 1) {
+					ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, true);
+					ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
 
-		ADC_Relay_SetState(1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin,
-			mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1));
-	} else {
-		// Current 24mA : ISEL_LOW, ISEL10A, ISEL
-		// Current 1A   : ISEL_MID, ISEL10A, ISEL
-		// Current 10A  : ISEL_MID
+					ADC_Relays_SetState(
+						0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin, 1,
+						1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin, 1
+					);
+				} else {
+					ADC_Pin_SetState(11, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, true);
+					ADC_Pin_SetState(10, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
 
-		ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, mode == MEASURE_MODE_VOLTAGE && range == 0);
-		ADC_Pin_SetState(13, USEL10_4_GPIO_Port, USEL10_4_Pin, mode == MEASURE_MODE_VOLTAGE && range == 1);
-		ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, mode == MEASURE_MODE_CURRENT && range == 0);
-		ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, mode == MEASURE_MODE_CURRENT && (range == 1 || range == 2));
+					ADC_Relays_SetState(
+						0, ISEL10_S_3_GPIO_Port, ISEL10_S_3_Pin, ISEL10_R_3_GPIO_Port, ISEL10_R_3_Pin, 0,
+						1, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, ISEL_R_3_GPIO_Port, ISEL_R_3_Pin, 0
+					);
+				}
+			}
+		} else {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 0) {
+					ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, true);
+					ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, false);
+				} else {
+					ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, true);
+					ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, false);
+				}
+				ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, false);
+				ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, false);
 
-		ADC_Relay_SetState(2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin,
-			mode == MEASURE_MODE_VOLTAGE || (mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1)));
+				ADC_Relays_SetState(
+					2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+					3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 0
+				);
+			} else {
+				ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, false);
+				ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, false);
+				if (range == 0) {
+					ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, true);
+					ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, false);
 
-		ADC_Relay_SetState(3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin,
-			mode == MEASURE_MODE_CURRENT && (range == 0 || range == 1));
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 1
+					);
+				} else if (range == 1) {
+					ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, true);
+					ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, false);
+
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 1
+					);
+				} else {
+					ADC_Pin_SetState(15, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, true);
+					ADC_Pin_SetState(14, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, false);
+
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 0,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 0
+					);
+				}
+			}
+		}
+	} else if (g_afeVersion == 3) {
+		if (channelIndex == 0) {
+			ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, range == 1);
+		} else if (channelIndex == 1) {
+			ADC_Relay_SetState(1, USEL1_2_GPIO_Port, USEL1_2_Pin, USEL20_2_GPIO_Port, USEL20_2_Pin, range ? 0 : 1);
+		} else if (channelIndex == 2) {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 0) {
+					ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, true);
+					ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, false);
+					ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, false);
+				} else if (range == 1) {
+					ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, true);
+					ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, false);
+					ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, false);
+				} else {
+					ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, true);
+					ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, false);
+					ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, false);
+				}
+				ADC_Pin_SetState(3, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, false);
+			} else {
+				ADC_Pin_SetState(3, ISEL_S_3_GPIO_Port, ISEL_S_3_Pin, true);
+				ADC_Pin_SetState(8, USEL1_3_GPIO_Port, USEL1_3_Pin, false);
+				ADC_Pin_SetState(9, USEL20_3_GPIO_Port, USEL20_3_Pin, false);
+				ADC_Pin_SetState(2, USEL100_1_GPIO_Port, USEL100_1_Pin, false);
+			}
+		} else {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 0) {
+					ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, true);
+					ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, false);
+				} else {
+					ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, true);
+					ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, false);
+				}
+				ADC_Pin_SetState(14, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
+				ADC_Pin_SetState(15, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, false);
+
+				ADC_Relays_SetState(
+					2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+					3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 0
+				);
+			} else {
+				ADC_Pin_SetState(12, USEL1_4_GPIO_Port, USEL1_4_Pin, false);
+				ADC_Pin_SetState(13, USEL20_4_GPIO_Port, USEL20_4_Pin, false);
+				if (range == 0) {
+					ADC_Pin_SetState(14, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, true);
+					ADC_Pin_SetState(15, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, false);
+
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 1
+					);
+				} else if (range == 1) {
+					ADC_Pin_SetState(15, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, true);
+					ADC_Pin_SetState(14, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
+
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 1,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 1
+					);
+				} else {
+					ADC_Pin_SetState(15, ISEL_LOW_4_GPIO_Port, ISEL_LOW_4_Pin, true);
+					ADC_Pin_SetState(14, ISEL_LOW_3_GPIO_Port, ISEL_LOW_3_Pin, false);
+
+					ADC_Relays_SetState(
+						2, ISEL10_S_4_GPIO_Port, ISEL10_S_4_Pin, ISEL10_R_4_GPIO_Port, ISEL10_R_4_Pin, 0,
+						3, ISEL_S_4_GPIO_Port, ISEL_S_4_Pin, ISEL_R_4_GPIO_Port, ISEL_R_4_Pin, 0
+					);
+				}
+			}
+		}
 	}
 
 	//
-	ADC_factor[channelIndex] = getAinConversionFactor(channelIndex, mode, range);
+	ADC_factor[channelIndex] = getAinConversionFactor(g_afeVersion, channelIndex, mode, range);
+
+	ADC_calPoints[channelIndex].p1CalX = p1CalX;
+	ADC_calPoints[channelIndex].p1CalY = p1CalY;
+	ADC_calPoints[channelIndex].p2CalX = p2CalX;
+	ADC_calPoints[channelIndex].p2CalY = p2CalY;
 
 	g_adcMovingAverage[channelIndex].reset(numSamples);
+
+	powerCalcReset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -263,11 +576,17 @@ void ADC_SetSampleRate(int ksps) {
 	g_adcMovingAverage[1].reset();
 	g_adcMovingAverage[2].reset();
 	g_adcMovingAverage[3].reset();
+
+	powerCalcReset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void ADC_Setup() {
+	if (g_afeVersion == 4) {
+		return;
+	}
+
 	__HAL_SPI_ENABLE(hspiADC);
 
 	ADC_SwReset_Command();
@@ -276,7 +595,7 @@ void ADC_Setup() {
 
 	////////////////////////////////////////
 
-	ADC_SetSampleRate(1);
+	ADC_SetSampleRate(16);
 
 	ADC_WriteReg(0x02, 0b1111'0010); // CONFIG2
 	ADC_WriteReg(0x03, 0b1100'0000); // CONFIG3
@@ -286,13 +605,29 @@ void ADC_Setup() {
 	////////////////////////////////////////
 
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-		uint8_t mode = MEASURE_MODE_VOLTAGE;
-		uint8_t range = channelIndex == 0 || channelIndex == 1 ? 2 : 1;
+		uint8_t mode =
+			g_afeVersion == 1 ? MEASURE_MODE_VOLTAGE :
+			g_afeVersion == 3 ? (
+					channelIndex == 1 ? MEASURE_MODE_CURRENT : MEASURE_MODE_VOLTAGE
+			) :
+			MEASURE_MODE_VOLTAGE;
+
+		uint8_t range =
+			g_afeVersion == 1 ? (
+				channelIndex == 0 || channelIndex == 1 ? 2 : 1
+			) :
+			g_afeVersion == 3 ? (
+				channelIndex == 0 ? 1 :
+				channelIndex == 1 ? 1 :
+				channelIndex == 2 ? 2 :
+				1
+			) :
+			0;
 
 		currentState.ain[channelIndex].mode = mode;
 		currentState.ain[channelIndex].range = range;
 
-		ADC_UpdateChannel(channelIndex, mode, range, 1);
+		ADC_UpdateChannel(channelIndex, mode, range, 1, 0, 0, 1, 1);
 	}
 
 	////////////////////////////////////////
@@ -321,6 +656,10 @@ void ADC_StopMeasuring() {
 }
 
 void ADC_SetParams(SetParams &newState) {
+	if (g_afeVersion == 4) {
+		return;
+	}
+
 	uint8_t ADC_pga_before[4] = {
 		ADC_pga[0],
 		ADC_pga[1],
@@ -349,7 +688,11 @@ void ADC_SetParams(SetParams &newState) {
 				channelIndex,
 				newState.ain[channelIndex].mode,
 				newState.ain[channelIndex].range,
-				numSamples
+				numSamples,
+				newState.ain[channelIndex].p1CalX,
+				newState.ain[channelIndex].p1CalY,
+				newState.ain[channelIndex].p2CalX,
+				newState.ain[channelIndex].p2CalY
 			);
 		}
 	}
@@ -395,7 +738,7 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 	ADC_StopMeasuring();
 
 	ADC_DLOG_started = false;
-	ADC_SetSampleRate(1);
+	ADC_SetSampleRate(16);
 
 	ADC_StartMeasuring();
 }
@@ -406,16 +749,18 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 //
 
 void ADC_GetSamples(float *samples) {
-	if (IS_24_BIT) {
-		samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 23));
-		samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 23));
-		samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 23));
-		samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 23));
-	} else {
-		samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 15));
-		samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 15));
-		samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 15));
-		samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 15));
+	if (g_afeVersion != 4) {
+		if (IS_24_BIT) {
+			samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 23));
+			samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 23));
+			samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 23));
+			samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 23));
+		} else {
+			samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 15));
+			samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 15));
+			samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 15));
+			samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 15));
+		}
 	}
 }
 
@@ -463,6 +808,12 @@ void ADC_AfterMeasure() {
 	g_adcMovingAverage[1](ADC_ch[1]);
 	g_adcMovingAverage[2](ADC_ch[2]);
 	g_adcMovingAverage[3](ADC_ch[3]);
+
+	if (g_afeVersion == 3) {
+		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOG, GPIO_PIN_15) << 1);
+	}
+
+	powerCalc(ADC_ch[0], ADC_ch[1]);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -471,7 +822,7 @@ void ADC_AfterMeasure() {
 //
 
 inline void ADC_Measure() {
-	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
@@ -498,7 +849,7 @@ inline void ADC_Measure() {
 
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
-	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

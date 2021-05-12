@@ -693,17 +693,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, USEL1_4_Pin|USEL10_4_Pin|ISEL_2_Pin|ISEL10_R_4_Pin
+  HAL_GPIO_WritePin(GPIOC, USEL1_4_Pin|USEL20_4_Pin|ISEL_2_Pin|ISEL10_R_4_Pin
                           |ISEL_LOW_4_Pin|ISEL_MID_4_Pin|DOUT4_Pin|DOUT5_Pin
                           |IN_CTRL1_Pin|IN_CTRL0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, USEL1_2_Pin|USEL10_2_Pin|USEL100_2_Pin|ISEL_S_4_Pin
+  HAL_GPIO_WritePin(GPIOF, USEL1_2_Pin|USEL20_2_Pin|USEL100_2_Pin|ISEL_S_4_Pin
                           |ISEL_R_4_Pin|ISEL10_S_4_Pin|DAC_CLR_1_Pin|DAC_CLR_2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, DOUT0_Pin|DOUT1_Pin|DOUT2_Pin|DOUT3_Pin
-                          |DOUT_EN_Pin, GPIO_PIN_RESET);
+                          |DOUT_EN_Pin|ADIB2_SW_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, DOUT6_Pin|DOUT7_Pin|ADC_START_Pin|SLOW_DIN_1_Pin
@@ -721,14 +721,14 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOG, IN_CTRL7_Pin|IN_CTRL6_Pin|IN_CTRL5_Pin|IN_CTRL4_Pin
                           |IN_CTRL3_Pin|IN_CTRL2_Pin|ISEL_R_3_Pin|ISEL_S_3_Pin
-                          |USEL100_1_Pin|USEL10_1_Pin|USEL1_1_Pin|ISEL_1_Pin, GPIO_PIN_RESET);
+                          |USEL100_1_Pin|USEL20_1_Pin|USEL1_1_Pin|ISEL_1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(ADC_CS_GPIO_Port, ADC_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, USEL10_3_Pin|USEL1_3_Pin|ISEL_MID_3_Pin|ISEL_LOW_3_Pin
-                          |ISEL10_R_3_Pin|ISEL10_S_3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, USEL20_3_Pin|USEL1_3_Pin|ADIB1_SW_Pin|ISEL_MID_3_Pin
+                          |ISEL_LOW_3_Pin|ISEL10_R_3_Pin|ISEL10_S_3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : DIN4_Pin DIN3_Pin DIN2_Pin DIB_SYNC_Pin
                            DIN6_Pin DIN5_Pin */
@@ -738,10 +738,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : USEL1_4_Pin USEL10_4_Pin ISEL_2_Pin ISEL10_R_4_Pin
+  /*Configure GPIO pins : USEL1_4_Pin USEL20_4_Pin ISEL_2_Pin ISEL10_R_4_Pin
                            ISEL_LOW_4_Pin ISEL_MID_4_Pin DOUT4_Pin DOUT5_Pin
                            IN_CTRL1_Pin IN_CTRL0_Pin */
-  GPIO_InitStruct.Pin = USEL1_4_Pin|USEL10_4_Pin|ISEL_2_Pin|ISEL10_R_4_Pin
+  GPIO_InitStruct.Pin = USEL1_4_Pin|USEL20_4_Pin|ISEL_2_Pin|ISEL10_R_4_Pin
                           |ISEL_LOW_4_Pin|ISEL_MID_4_Pin|DOUT4_Pin|DOUT5_Pin
                           |IN_CTRL1_Pin|IN_CTRL0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -749,10 +749,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : USEL1_2_Pin USEL10_2_Pin USEL100_2_Pin ISEL_S_4_Pin
+  /*Configure GPIO pins : USEL1_2_Pin USEL20_2_Pin USEL100_2_Pin ISEL_S_4_Pin
                            ISEL_R_4_Pin ISEL10_S_4_Pin DAC_CS_1_Pin DAC_CLR_1_Pin
                            DAC_CS_2_Pin DAC_CLR_2_Pin */
-  GPIO_InitStruct.Pin = USEL1_2_Pin|USEL10_2_Pin|USEL100_2_Pin|ISEL_S_4_Pin
+  GPIO_InitStruct.Pin = USEL1_2_Pin|USEL20_2_Pin|USEL100_2_Pin|ISEL_S_4_Pin
                           |ISEL_R_4_Pin|ISEL10_S_4_Pin|DAC_CS_1_Pin|DAC_CLR_1_Pin
                           |DAC_CS_2_Pin|DAC_CLR_2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -761,9 +761,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
   /*Configure GPIO pins : DOUT0_Pin DOUT1_Pin DOUT2_Pin DOUT3_Pin
-                           DOUT_EN_Pin ADC_CS_Pin */
+                           DOUT_EN_Pin ADIB2_SW_Pin ADC_CS_Pin */
   GPIO_InitStruct.Pin = DOUT0_Pin|DOUT1_Pin|DOUT2_Pin|DOUT3_Pin
-                          |DOUT_EN_Pin|ADC_CS_Pin;
+                          |DOUT_EN_Pin|ADIB2_SW_Pin|ADC_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -832,10 +832,10 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : IN_CTRL7_Pin IN_CTRL6_Pin IN_CTRL5_Pin IN_CTRL4_Pin
                            IN_CTRL3_Pin IN_CTRL2_Pin ISEL_R_3_Pin ISEL_S_3_Pin
-                           USEL100_1_Pin USEL10_1_Pin USEL1_1_Pin ISEL_1_Pin */
+                           USEL100_1_Pin USEL20_1_Pin USEL1_1_Pin ISEL_1_Pin */
   GPIO_InitStruct.Pin = IN_CTRL7_Pin|IN_CTRL6_Pin|IN_CTRL5_Pin|IN_CTRL4_Pin
                           |IN_CTRL3_Pin|IN_CTRL2_Pin|ISEL_R_3_Pin|ISEL_S_3_Pin
-                          |USEL100_1_Pin|USEL10_1_Pin|USEL1_1_Pin|ISEL_1_Pin;
+                          |USEL100_1_Pin|USEL20_1_Pin|USEL1_1_Pin|ISEL_1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -847,10 +847,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(SD_DETECT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : USEL10_3_Pin USEL1_3_Pin ISEL_MID_3_Pin ISEL_LOW_3_Pin
-                           ISEL10_R_3_Pin ISEL10_S_3_Pin */
-  GPIO_InitStruct.Pin = USEL10_3_Pin|USEL1_3_Pin|ISEL_MID_3_Pin|ISEL_LOW_3_Pin
-                          |ISEL10_R_3_Pin|ISEL10_S_3_Pin;
+  /*Configure GPIO pins : USEL20_3_Pin USEL1_3_Pin ADIB1_SW_Pin ISEL_MID_3_Pin
+                           ISEL_LOW_3_Pin ISEL10_R_3_Pin ISEL10_S_3_Pin */
+  GPIO_InitStruct.Pin = USEL20_3_Pin|USEL1_3_Pin|ADIB1_SW_Pin|ISEL_MID_3_Pin
+                          |ISEL_LOW_3_Pin|ISEL10_R_3_Pin|ISEL10_S_3_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

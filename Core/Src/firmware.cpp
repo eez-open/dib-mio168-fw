@@ -22,6 +22,17 @@
 
 volatile uint32_t g_debugVarDiff;
 
+/*
+
+ - AFE3 is the same as AFE1, except it has simpler management of first two channels (AIN1 and AIN2).
+   Last two (AIN3 and AIN3) are the same as AFE1.
+
+ - When AFE4 is detected it means no AFE is connected.
+
+*/
+
+uint8_t g_afeVersion;
+
 ////////////////////////////////////////////////////////////////////////////////
 
 uint8_t g_buffer[BUFFER_SIZE];
@@ -71,7 +82,7 @@ void Command_GetInfo(Request &request, Response &response) {
 	response.getInfo.idw0 = HAL_GetUIDw0();
 	response.getInfo.idw1 = HAL_GetUIDw1();
 	response.getInfo.idw2 = HAL_GetUIDw2();
-	response.getInfo.afeVersion = ((READ_PIN(AFE_ID1_GPIO_Port, AFE_ID1_Pin) << 1) | READ_PIN(AFE_ID0_GPIO_Port, AFE_ID0_Pin)) + 1;
+	response.getInfo.afeVersion = g_afeVersion;
 }
 
 void Command_GetState(Request &request, Response &response) {
@@ -85,8 +96,12 @@ void Command_GetState(Request &request, Response &response) {
 	response.getState.dinStates = Din_readDataInputs();
 
 	ADC_GetSamples(response.getState.ainValues);
-
 	response.getState.ainFaultStatus = ADC_faultStatus;
+	response.getState.ainDiagStatus = ADC_diagStatus;
+	response.getState.activePower = g_activePower;
+	response.getState.reactivePower = g_reactivePower;
+	response.getState.voltRMS = g_voltRMS;
+	response.getState.currRMS = g_currRMS;
 
 	memcpy(&response.getState.dlogState, &dlogState, sizeof(DlogState));
 }
@@ -174,6 +189,18 @@ void Command_DiskDriveIoctl(Request &request, Response &response) {
 
 // setup is called once at the beginning from the main.c
 extern "C" void setup() {
+	g_afeVersion = ((READ_PIN(AFE_ID1_GPIO_Port, AFE_ID1_Pin) << 1) | READ_PIN(AFE_ID0_GPIO_Port, AFE_ID0_Pin)) + 1;
+
+	if (g_afeVersion == 3) {
+		// DIAG#1 and DIAG#2
+		GPIO_InitTypeDef GPIO_InitStruct = { 0 };
+
+		GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+		GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+		GPIO_InitStruct.Pull = GPIO_PULLUP;
+		HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+	}
+
 	Din_Setup();
 	Dout_Setup();
 	ADC_Setup();
