@@ -14,13 +14,12 @@
 #include "adc.h"
 #include "dac7760.h"
 #include "dac7563.h"
+#include "dac_funcgen.h"
 #include "pwm.h"
 #include "dlog.h"
 
 #include "din_dlog.h"
 #include "utils.h"
-
-volatile uint32_t g_debugVarDiff;
 
 /*
 
@@ -114,6 +113,7 @@ void Command_SetParams(Request &request, Response &response) {
 	DAC_SetParams(1, request.setParams);
 	DACDual_SetParams(0, request.setParams);
 	DACDual_SetParams(1, request.setParams);
+	DAC_FuncGen_SetParams(request.setParams);
 	PWM_SetParams(0, request.setParams);
 	PWM_SetParams(1, request.setParams);
 
@@ -208,15 +208,11 @@ extern "C" void setup() {
     DAC_Setup(1);
     DACDual_Setup();
     PWM_Setup();
+	DAC_FuncGen_Setup();
 }
 
 // loop is called, of course, inside the loop from the main.c
 extern "C" void loop() {
-	static uint32_t lastTick;
-	uint32_t tick = HAL_GetTick();
-	g_debugVarDiff = tick - lastTick;
-	lastTick = tick;
-
 	// start SPI transfer
 	uint32_t input[(sizeof(Request) + 3) / 4 + 1];
 	uint32_t output[(sizeof(Request) + 3) / 4];

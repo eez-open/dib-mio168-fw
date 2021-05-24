@@ -7,10 +7,12 @@
 #include "utils.h"
 #include "dlog.h"
 #include "dlog_file.h"
+#include "dac_funcgen.h"
 
 using namespace eez;
 
 extern "C" TIM_HandleTypeDef htim6; // for DIN's data logging
+extern "C" TIM_HandleTypeDef htim7; // for DAC func. gen.
 uint8_t g_dinResources;
 uint8_t g_doutResources;
 
@@ -93,6 +95,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 				*(DLOG_buffer + DLOG_bufferIndex++ % DLOG_bufferSize) = currentState.doutStates;
 			}
 		}
+	} else if (htim == &htim7) {
+		DAC_FuncGen_onTimerPeriodElapsed();
 	}
 }
 

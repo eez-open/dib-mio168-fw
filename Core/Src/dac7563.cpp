@@ -25,26 +25,41 @@ void DACDual_Setup() {
 	DACDual_SpiWrite(0b00000010, 0x00, 0x03);
 }
 
+void DACDual_GetValueRange(float &min, float &max) {
+	min = -10.0f;
+	max = 10.0f;
+}
+
+float DACDual_ValueToDacValue(float value) {
+	float min = -10.0f;
+	float max = 10.0f;
+	return 65535.0f * (value - min) / (max - min);
+}
+
+void DACDual_SetValue(int i, float value) {
+	uint16_t dacValue;
+
+	if (value < 0) {
+		dacValue = 0;
+	} else if (value > 65535.0f) {
+		dacValue = 65535;
+	} else {
+		dacValue = roundf(value);
+	}
+
+	if (i == 0) {
+		DACDual_SpiWrite(0b00011000, dacValue >> 8, dacValue & 0xFF);
+	} else {
+		DACDual_SpiWrite(0b00011001, dacValue >> 8, dacValue & 0xFF);
+	}
+
+}
+
 void DACDual_SetParams(int i, SetParams &newState) {
 	float newVoltage = newState.aout_dac7563[i].voltage;
 	if (newVoltage != currentState.aout_dac7563[i].voltage) {
-		uint16_t dacValue;
-
-		float min = -10.0f;
-		float max = 10.0f;
-
-		if (newVoltage <= min) {
-			dacValue = 0;
-		} else if (newVoltage >= max) {
-			dacValue = 65535;
-		} else {
-			dacValue = (uint16_t)roundf(65535.0f * (newVoltage - min) / (max - min));
-		}
-
-		if (i == 0) {
-			DACDual_SpiWrite(0b00011000, dacValue >> 8, dacValue & 0xFF);
-		} else {
-			DACDual_SpiWrite(0b00011001, dacValue >> 8, dacValue & 0xFF);
+		if (newState.dacWaveformParameters[2 + i].waveform == WAVEFORM_NONE) {
+			DACDual_SetValue(i, DACDual_ValueToDacValue(newVoltage));
 		}
 	}
 }

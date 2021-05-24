@@ -15,6 +15,16 @@ enum SourceMode {
 	SOURCE_MODE_VOLTAGE
 };
 
+enum Waveform {
+	WAVEFORM_NONE,
+	WAVEFORM_SINE_WAVE,
+	WAVEFORM_TRIANGLE,
+	WAVEFORM_SQUARE_WAVE,
+	WAVEFORM_PULSE,
+	WAVEFORM_SAWTOOTH,
+	WAVEFORM_ARBITRARY
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 
 enum Command {
@@ -49,6 +59,15 @@ struct DlogState {
     uint32_t numSamples;
 };
 
+struct WaveformParameters {
+	Waveform waveform;
+	float frequency;
+	float phaseShift;
+	float amplitude;
+	float offset;
+	float pulseWidth;
+};
+
 struct SetParams {
 	uint8_t dinRanges;
 	uint8_t dinSpeeds;
@@ -76,6 +95,8 @@ struct SetParams {
 	struct {
 		float voltage;
 	} aout_dac7563[2];
+
+	WaveformParameters dacWaveformParameters[4];
 
 	struct {
 		float freq;
@@ -197,7 +218,7 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
                 return 240.0; // +/- 240 V
             }
             if (mode == MEASURE_MODE_CURRENT) {
-                return 0.048; // +/- 48 mV ( = 2.4 V / 50 Ohm)
+                return 2.4 / 33 / 1; // +/- 48 mV (22 ohm, PGA is 1)
             }
         } else {
             if (mode == MEASURE_MODE_VOLTAGE) {
@@ -208,7 +229,7 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
             }
             if (mode == MEASURE_MODE_CURRENT) {
                 if (range == 0) {
-                    return 2.4 / 33 / 2; // +/- 24 mA (33 ohm, PGA is 2)
+                    return 2.4 / 22 / 1; // +/- 48 mA (22 ohm, PGA is 1)
                 }
                 if (range == 1) {
                     return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)
@@ -238,7 +259,7 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
                 return 240.0; // +/- 240 V
             }
 
-            return 0.048; // +/- 48 mV
+            return 2.4 / 33 / 1; // +/- 48 mA (33 ohm, PGA is 1)
         } else {
             if (mode == MEASURE_MODE_VOLTAGE) {
                 if (range == 0) {
@@ -248,7 +269,7 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
             }
             if (mode == MEASURE_MODE_CURRENT) {
                 if (range == 0) {
-                    return 2.4 / 33 / 2; // +/- 24 mA (33 ohm, PGA is 2)
+                    return 2.4 / 22 / 1; // +/- 48 mA (22 ohm, PGA is 1)
                 }
                 if (range == 1) {
                     return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)

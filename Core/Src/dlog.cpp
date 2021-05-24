@@ -12,14 +12,10 @@ uint32_t DLOG_bufferSize = 0;
 bool ADC_DLOG_started = false;
 bool DIN_DLOG_started = false;
 
-volatile uint32_t g_debugVarDiff_ADC1 = 0;
-volatile uint32_t g_debugVarDiff_ADC2 = 0;
-
 void DLOG_Data(Response &response) {
 	response.dlogRecordingData.recordIndex = DLOG_recordIndex;
 
 	auto n = DLOG_bufferIndex - DLOG_bufferLastTransferredIndex;
-	g_debugVarDiff_ADC1 = n;
 	if (n > DLOG_bufferSize) {
 		response.dlogRecordingData.numRecords = 0xFFFF; // buffer overflow
 		return;
@@ -51,6 +47,4 @@ void DLOG_Data(Response &response) {
 	DLOG_bufferLastTransferredIndex += n;
 
 	DLOG_recordIndex += response.dlogRecordingData.numRecords;
-
-	g_debugVarDiff_ADC2 = response.dlogRecordingData.numRecords;
 }
