@@ -146,7 +146,7 @@ void DAC_SetParams(int i, SetParams &newState) {
 		newOutputValue != currentState.aout_dac7760[i].outputValue ||
 		newOutputRange != currentState.aout_dac7760[i].outputRange
 	) {
-		if (newState.dacWaveformParameters[i].waveform == WAVEFORM_NONE) {
+		if (newState.aoutWaveformParameters[i].waveform == WAVEFORM_NONE) {
 			DAC_SetValue(i, newOutputRange, newOutputValue);
 		}
 	}

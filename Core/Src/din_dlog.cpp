@@ -1,3 +1,4 @@
+#include <funcgen.h>
 #include <memory.h>
 
 #include "main.h"
@@ -7,7 +8,6 @@
 #include "utils.h"
 #include "dlog.h"
 #include "dlog_file.h"
-#include "dac_funcgen.h"
 
 using namespace eez;
 
@@ -96,7 +96,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 			}
 		}
 	} else if (htim == &htim7) {
-		DAC_FuncGen_onTimerPeriodElapsed();
+		FuncGen_onTimerPeriodElapsed();
 	}
 }
 

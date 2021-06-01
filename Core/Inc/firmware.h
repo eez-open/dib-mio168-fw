@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdlib.h>
+#include <stdint.h>
+
 static const size_t MAX_PATH_LENGTH = 255;
 static const size_t CHANNEL_LABEL_MAX_LENGTH = 5;
 
@@ -17,14 +20,16 @@ enum SourceMode {
 
 enum Waveform {
 	WAVEFORM_NONE,
-	WAVEFORM_SINE_WAVE,
+	WAVEFORM_DC,
+	WAVEFORM_SINE,
+	WAVEFORM_SINE_HALF,
+	WAVEFORM_SINE_RECTIFIED,
 	WAVEFORM_TRIANGLE,
-	WAVEFORM_SQUARE_WAVE,
+	WAVEFORM_SQUARE,
 	WAVEFORM_PULSE,
 	WAVEFORM_SAWTOOTH,
 	WAVEFORM_ARBITRARY
 };
-
 ////////////////////////////////////////////////////////////////////////////////
 
 enum Command {
@@ -65,7 +70,7 @@ struct WaveformParameters {
 	float phaseShift;
 	float amplitude;
 	float offset;
-	float pulseWidth;
+	float dutyCycle;
 };
 
 struct SetParams {
@@ -73,6 +78,7 @@ struct SetParams {
 	uint8_t dinSpeeds;
 
 	uint8_t doutStates;
+	WaveformParameters doutWaveformParameters[8];
 
 	struct {
 		uint8_t mode; // enum SourceMode
@@ -96,7 +102,7 @@ struct SetParams {
 		float voltage;
 	} aout_dac7563[2];
 
-	WaveformParameters dacWaveformParameters[4];
+	WaveformParameters aoutWaveformParameters[4];
 
 	struct {
 		float freq;

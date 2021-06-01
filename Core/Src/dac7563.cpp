@@ -58,7 +58,7 @@ void DACDual_SetValue(int i, float value) {
 void DACDual_SetParams(int i, SetParams &newState) {
 	float newVoltage = newState.aout_dac7563[i].voltage;
 	if (newVoltage != currentState.aout_dac7563[i].voltage) {
-		if (newState.dacWaveformParameters[2 + i].waveform == WAVEFORM_NONE) {
+		if (newState.aoutWaveformParameters[2 + i].waveform == WAVEFORM_NONE) {
 			DACDual_SetValue(i, DACDual_ValueToDacValue(newVoltage));
 		}
 	}

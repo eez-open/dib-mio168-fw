@@ -5,6 +5,7 @@
 #include "fatfs.h"
 #include <bsp_driver_sd.h>
 #include <ff_gen_drv.h>
+#include <funcgen.h>
 #include <sd_diskio.h>
 
 #include "firmware.h"
@@ -14,7 +15,6 @@
 #include "adc.h"
 #include "dac7760.h"
 #include "dac7563.h"
-#include "dac_funcgen.h"
 #include "pwm.h"
 #include "dlog.h"
 
@@ -113,7 +113,7 @@ void Command_SetParams(Request &request, Response &response) {
 	DAC_SetParams(1, request.setParams);
 	DACDual_SetParams(0, request.setParams);
 	DACDual_SetParams(1, request.setParams);
-	DAC_FuncGen_SetParams(request.setParams);
+	FuncGen_SetParams(request.setParams);
 	PWM_SetParams(0, request.setParams);
 	PWM_SetParams(1, request.setParams);
 
@@ -208,14 +208,15 @@ extern "C" void setup() {
     DAC_Setup(1);
     DACDual_Setup();
     PWM_Setup();
-	DAC_FuncGen_Setup();
+	FuncGen_Setup();
 }
+
+volatile uint32_t input[(sizeof(Request) + 3) / 4 + 1];
+volatile uint32_t output[(sizeof(Request) + 3) / 4];
 
 // loop is called, of course, inside the loop from the main.c
 extern "C" void loop() {
 	// start SPI transfer
-	uint32_t input[(sizeof(Request) + 3) / 4 + 1];
-	uint32_t output[(sizeof(Request) + 3) / 4];
 	transferState = TRANSFER_STATE_WAIT;
     HAL_SPI_TransmitReceive_DMA(hspiMaster, (uint8_t *)output, (uint8_t *)input, sizeof(Request));
     RESET_PIN(DIB_IRQ_GPIO_Port, DIB_IRQ_Pin);
