@@ -22,8 +22,8 @@ enum Waveform {
 	WAVEFORM_NONE,
 	WAVEFORM_DC,
 	WAVEFORM_SINE,
-	WAVEFORM_SINE_HALF,
-	WAVEFORM_SINE_RECTIFIED,
+	WAVEFORM_HALF_RECTIFIED,
+	WAVEFORM_FULL_RECTIFIED,
 	WAVEFORM_TRIANGLE,
 	WAVEFORM_SQUARE,
 	WAVEFORM_PULSE,
@@ -255,33 +255,21 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
             }
             return 10.0 * 2.4 / 0.82 / 2; // +/- 10 A (10 A is 0.82 V, PGA is 2)
         } else if (channelIndex == 2) {
-            if (mode == MEASURE_MODE_VOLTAGE) {
-                if (range == 0) {
-                    return 2.4; // +/- 2.4 V
-                }
-                if (range == 1) {
-                    return 48.0; // +/- 48.0 V
-                }
-                return 240.0; // +/- 240 V
+            if (range == 0) {
+                return 2.4; // +/- 2.4 V
             }
-
-            return 2.4 / 33 / 1; // +/- 48 mA (33 ohm, PGA is 1)
+            if (range == 1) {
+                return 48.0; // +/- 48.0 V
+            }
+            return 240.0; // +/- 240 V
         } else {
-            if (mode == MEASURE_MODE_VOLTAGE) {
-                if (range == 0) {
-                    return 2.4; // +/- 2.4 V
-                }
-                return 12.0; // +/- 12 V
+            if (range == 0) {
+                return 2.4 / 33 / 1; // +/- 24 mA (22 ohm, PGA is 1)
             }
-            if (mode == MEASURE_MODE_CURRENT) {
-                if (range == 0) {
-                    return 2.4 / 22 / 1; // +/- 48 mA (22 ohm, PGA is 1)
-                }
-                if (range == 1) {
-                    return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)
-                }
-                return 2.4 / 0.01 / 12; // +/- 10 A (0.01 ohm, PGA is 12)
+            if (range == 1) {
+                return 2.4 / 0.33 / 4; // +/- 1.2 A (0.33 ohm, PGA is 4)
             }
+            return 2.4 / 0.01 / 12; // +/- 10 A (0.01 ohm, PGA is 12)
         }
     }
     return 0;

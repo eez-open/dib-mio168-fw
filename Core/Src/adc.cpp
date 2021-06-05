@@ -6,9 +6,7 @@
 #include "firmware.h"
 #include "utils.h"
 #include "dlog.h"
-
-#define ADC_USE_ADC_DRDY_PIN
-#define ADC_USE_DMA
+#include "funcgen.h"
 
 static const int DEFAULT_SAMPLE_RATE_KSPS = 16;
 
@@ -41,10 +39,14 @@ static struct {
 volatile static bool ADC_measureStarted = false;
 volatile static bool ADC_dataReady = false;
 
-uint8_t ADC_tx[16] = { 0x12 };
-uint8_t ADC_rx[16];
+static uint8_t ADC_tx[16] = { 0x12 };
+
+static uint8_t ADC_rxBuffer[16 * 16];
+static uint8_t *ADC_rx = ADC_rxBuffer;
+static uint8_t *ADC_rxNext;
 
 int ADC_ksps;
+float ADC_period;
 #define IS_24_BIT (ADC_ksps < 32)
 
 int g_DMA;
@@ -96,7 +98,7 @@ void powerCalcReset() {
 	g_currRMS = 0;
 }
 
-void powerCalc(int32_t *ADC_ch, int ksps) {
+void powerCalc(int32_t *ADC_ch, float period) {
 	float volt;
 	float curr;
 
@@ -126,7 +128,7 @@ void powerCalc(int32_t *ADC_ch, int ksps) {
 		return;
 	}
 
-	int n = ksps * 1000 / currentState.powerLineFrequency;
+	int n = (int)floorf((1.0f / period) / currentState.powerLineFrequency);
 
 	g_voltBuffer[g_bufferIndex] = volt;
 	g_currBuffer[g_bufferIndex] = curr;
@@ -595,6 +597,7 @@ void ADC_SetSampleRate(int ksps) {
 	else                 ADC_WriteReg(0x01, 0b1111'0110); // CONFIG1  24-bit 1  KSPS
 
 	ADC_ksps = ksps;
+	ADC_period = 1.0f / (ksps * 1000.0f);
 
 	g_adcMovingAverage[0].reset();
 	g_adcMovingAverage[1].reset();
@@ -758,6 +761,9 @@ void ADC_DLOG_Start(Request &request, Response &response) {
 	DLOG_bufferSize = (BUFFER_SIZE / DLOG_recordSize) * DLOG_recordSize;
 
 	ADC_DLOG_started = true;
+
+	FuncGen_SetParams(currentState);
+
 	ADC_StartMeasuring();
 }
 
@@ -766,6 +772,8 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 
 	ADC_DLOG_started = false;
 	ADC_SetSampleRate(DEFAULT_SAMPLE_RATE_KSPS);
+
+	FuncGen_SetParams(currentState);
 
 	ADC_StartMeasuring();
 }
@@ -791,17 +799,19 @@ void ADC_GetSamples(float *samples) {
 	}
 }
 
-void ADC_AfterMeasure(int ksps) {
+void ADC_AfterMeasure(float period) {
 	uint8_t *rx = ADC_rx + 1;
 
 	ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
 	rx += 3;
 
 	if (ADC_DLOG_started) {
-		static int adcDlogKspsCounter = 0;
+		static float adcDlogAcc = 0;
 
-		if (++adcDlogKspsCounter * ADC_ksps >= ksps) {
-			adcDlogKspsCounter= 0;
+		adcDlogAcc += period;
+
+		if (adcDlogAcc >= ADC_period) {
+			adcDlogAcc -= ADC_period;
 
 			auto p = DLOG_buffer + DLOG_bufferIndex % DLOG_bufferSize;
 
@@ -837,10 +847,11 @@ void ADC_AfterMeasure(int ksps) {
 		ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
 	}
 
-	static int g_adcMovingAverageCounter;
-	if (++g_adcMovingAverageCounter >= ksps) {
-		// 1ksps
-		g_adcMovingAverageCounter = 0;
+	// 1ksps
+	static float g_adcMovingAverageACC;
+	g_adcMovingAverageACC += period;
+	if (++g_adcMovingAverageACC >= 0.001f) {
+		g_adcMovingAverageACC -= 0.001f;
 
 		g_adcMovingAverage[0](ADC_ch[0]);
 		g_adcMovingAverage[1](ADC_ch[1]);
@@ -852,49 +863,7 @@ void ADC_AfterMeasure(int ksps) {
 		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOG, GPIO_PIN_15) << 1);
 	}
 
-	powerCalc(ADC_ch, ksps);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-//
-// ADC measure, no DMA version
-//
-
-void ADC_Measure() {
-	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-//	uint8_t *rx = ADC_rx + 1;
-//
-//	ADC_SPI_TransferLL(0x12);
-//	if (IS_24_BIT) {
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//	} else {
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//		*rx++ = ADC_SPI_TransferReceiveLL(0); *rx++ = ADC_SPI_TransferReceiveLL(0);
-//	}
-
-	if (IS_24_BIT) {
-		HAL_SPI_TransmitReceive(hspiADC, ADC_tx, ADC_rx, 16, 100);
-	} else {
-		HAL_SPI_TransmitReceive(hspiADC, ADC_tx, ADC_rx, 12, 100);
-	}
-
-	ADC_dataReady = true;
-
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	powerCalc(ADC_ch, period);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -907,16 +876,22 @@ inline void ADC_Measure_Start() {
 	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
 	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
+	ADC_rxNext = ADC_rx + 16;
+	if (ADC_rxNext >= ADC_rxBuffer + sizeof(ADC_rxBuffer)) {
+		ADC_rxNext = ADC_rxBuffer;
+	}
+
 	if (IS_24_BIT) {
-		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 16);
+		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 16);
 	} else {
-		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rx, 12);
+		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 12);
 	}
 }
 
 void ADC_DMA_TransferCompleted(bool ok) {
 	if (ok) {
 		ADC_dataReady = true;
+		ADC_rx = ADC_rxNext;
 	}
 
 	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
@@ -928,28 +903,22 @@ void ADC_DMA_TransferCompleted(bool ok) {
 
 void ADC_MeasureTick() {
 	if (ADC_measureStarted) {
-#ifdef ADC_USE_DMA
 		if (g_DMA == 1) {
 			//HAL_SPI_Abort(hspiADC);
 		} else {
 			ADC_Measure_Start();
 		}
-#else
-		ADC_Measure();
-#endif
 	}
 }
 
-void ADC_MeasureTickFromFuncGen(int ksps) {
+void ADC_MeasureTickFromFuncGen(float period) {
 	if (ADC_dataReady) {
-		ADC_AfterMeasure(ksps);
+		ADC_AfterMeasure(period);
 	}
 }
 
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-#ifdef ADC_USE_ADC_DRDY_PIN
 	if (GPIO_Pin == ADC_DRDY_Pin) {
 		ADC_MeasureTick();
 	}
-#endif
 }

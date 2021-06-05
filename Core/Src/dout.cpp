@@ -54,6 +54,6 @@ void Dout_SetPinState(int i, int newState) {
 		} else {
 			RESET_PIN(doutPort[i], doutPin[i]);
 			doutStates &= ~(1 << i);
-		}
+	 	}
 	}
 }
