@@ -18,7 +18,7 @@ extern "C" TIM_HandleTypeDef htim7;
 #define M_PI_F ((float)M_PI)
 
 #define TICKS_RESERVE 10.0f
-#define TICKS_ADC 8.0f
+#define TICKS_ADC 12.0f
 #define TICKS_ADC_DLOG 10.0f
 #define TICKS_AOUT 4.0f
 #define TICKS_DOUT_FIXED 1.5f
@@ -248,8 +248,6 @@ void FuncGen_DOUT(int i) {
 	g_doutPhi[i] += g_doutDphi[i];
 	if (g_doutPhi[i] >= 2.0f * M_PI_F) {
 		g_doutPhi[i] -= 2.0f * M_PI_F;
-	} else {
-		g_doutPhi[i] -= 0.0f;
 	}
 
 	Dout_SetPinState(i, value > 0.5f ? 1 : 0);
