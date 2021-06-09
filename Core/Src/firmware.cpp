@@ -97,23 +97,32 @@ void Command_GetState(Request &request, Response &response) {
 	ADC_GetSamples(response.getState.ainValues);
 	response.getState.ainFaultStatus = ADC_faultStatus;
 	response.getState.ainDiagStatus = ADC_diagStatus;
-	response.getState.activePower = g_activePower;
-	response.getState.reactivePower = g_reactivePower;
-	response.getState.voltRMS = g_voltRMS;
-	response.getState.currRMS = g_currRMS;
+
+	if (currentState.acAnalysisEnabled) {
+		response.getState.activePower = g_activePower;
+		response.getState.reactivePower = g_reactivePower;
+		response.getState.voltRMS = g_voltRMS;
+		response.getState.currRMS = g_currRMS;
+	}
 
 	memcpy(&response.getState.dlogState, &dlogState, sizeof(DlogState));
 }
 
 void Command_SetParams(Request &request, Response &response) {
+	FuncGen_SetParams(request.setParams);
+
 	Din_SetParams(request.setParams);
+
 	Dout_SetParams(request.setParams);
+
 	ADC_SetParams(request.setParams);
+
 	DAC_SetParams(0, request.setParams);
 	DAC_SetParams(1, request.setParams);
+
 	DACDual_SetParams(0, request.setParams);
 	DACDual_SetParams(1, request.setParams);
-	FuncGen_SetParams(request.setParams);
+
 	PWM_SetParams(0, request.setParams);
 	PWM_SetParams(1, request.setParams);
 

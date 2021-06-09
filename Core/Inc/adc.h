@@ -13,8 +13,7 @@ void ADC_DMA_TransferCompleted(bool ok);
 void ADC_DLOG_Start(Request &request, Response &response);
 void ADC_DLOG_Stop(Request &request, Response &response);
 
-void ADC_MeasureTick();
-void ADC_MeasureTickFromFuncGen(float period);
+void ADC_Tick(float period);
 
 extern float g_activePower;
 extern float g_reactivePower;

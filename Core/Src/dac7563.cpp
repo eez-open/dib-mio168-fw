@@ -36,6 +36,37 @@ float DACDual_ValueToDacValue(float value) {
 	return 65535.0f * (value - min) / (max - min);
 }
 
+void DACDual_SetValue_FromFuncGen(int i, float value) {
+	currentState.aout_dac7563[i].voltage = value;
+
+	uint16_t dacValue;
+
+	if (value < 0) {
+		dacValue = 0;
+	} else if (value > 65535.0f) {
+		dacValue = 65535;
+	} else {
+		dacValue = roundf(value);
+	}
+
+	RESET_PIN(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin);
+
+	static auto DR = (__IO uint8_t *)&hspi2.Instance->DR;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = i == 0 ? 0b00011000 : 0b00011001;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = dacValue >> 8;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = dacValue & 0xFF;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_BSY) == SPI_FLAG_BSY);
+
+	SET_PIN(DAC_CS_DUAL_GPIO_Port, DAC_CS_DUAL_Pin);
+}
+
 void DACDual_SetValue(int i, float value) {
 	uint16_t dacValue;
 
@@ -52,13 +83,12 @@ void DACDual_SetValue(int i, float value) {
 	} else {
 		DACDual_SpiWrite(0b00011001, dacValue >> 8, dacValue & 0xFF);
 	}
-
 }
 
 void DACDual_SetParams(int i, SetParams &newState) {
-	float newVoltage = newState.aout_dac7563[i].voltage;
-	if (newVoltage != currentState.aout_dac7563[i].voltage) {
-		if (newState.aoutWaveformParameters[2 + i].waveform == WAVEFORM_NONE) {
+	if (newState.aoutWaveformParameters[2 + i].waveform == WAVEFORM_NONE) {
+		float newVoltage = newState.aout_dac7563[i].voltage;
+		if (newVoltage != currentState.aout_dac7563[i].voltage) {
 			DACDual_SetValue(i, DACDual_ValueToDacValue(newVoltage));
 		}
 	}

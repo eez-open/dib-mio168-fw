@@ -17,18 +17,9 @@ extern "C" TIM_HandleTypeDef htim7;
 
 #define M_PI_F ((float)M_PI)
 
-#define TICKS_RESERVE 10.0f
-#define TICKS_ADC 12.0f
-#define TICKS_ADC_DLOG 10.0f
-#define TICKS_AOUT 4.0f
-#define TICKS_DOUT_FIXED 1.5f
-#define TICKS_DOUT_PER_DOUT 0.35f
-
-static uint16_t TIMER_PERIOD;
-
 typedef float (*WaveformFunction)(float);
 
-//#define DEBUG_TIMING
+#define DEBUG_TIMING
 
 #ifdef DEBUG_TIMING
 float m_debugAOUT1;
@@ -38,9 +29,8 @@ float m_debugAOUT4;
 float m_debugADC;
 float m_debugDOUT;
 float m_debugTotal;
-float m_debugTicks;
 #define TIMING_BEGIN() uint16_t startCnt = TIM7->CNT;
-#define TIMING_END(var) { uint16_t endCnt = TIM7->CNT; if (endCnt > startCnt) { var = (endCnt - startCnt) / 90.0f; } else { var = (TIMER_PERIOD - startCnt + endCnt) / 90.0f; } }
+#define TIMING_END(var) { uint16_t endCnt = TIM7->CNT; if (endCnt > startCnt) { var = (endCnt - startCnt) / 88.0f; } else { var = (1375 - startCnt + endCnt) / 88.0f; } }
 #else
 #define TIMING_BEGIN() (void)0
 #define TIMING_END(var) (void)0
@@ -48,34 +38,44 @@ float m_debugTicks;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-WaveformFunction g_aoutWaveFormFunc[4];
-
-float g_aoutMin[4];
-float g_aoutMax[4];
-
-float g_aoutPhi[4];
-float g_aoutDphi[4];
-
-float g_aoutDutyCycles[4];
-
-WaveformParameters g_aoutWaveformParameters[4];
-
-////////////////////////////////////////////////////////////////////////////////
-
-WaveformFunction g_doutWaveFormFunc[8];
-
-float g_doutPhi[8];
-float g_doutDphi[8];
-
-float g_doutDutyCycles[8];
-
-WaveformParameters g_doutWaveformParameters[8];
-
-////////////////////////////////////////////////////////////////////////////////
-
 typedef void (*TimerTickFunc)(void);
-TimerTickFunc g_timerTickFunc[6];
-int g_numTimerTickFuncs;
+
+struct State {
+	////////////////////////////////////////////////////////////////////////////////
+
+	WaveformFunction aoutWaveFormFunc[4];
+
+	float aoutMin[4];
+	float aoutScale[4];
+
+	float aoutPhi[4];
+	float aoutDphi[4];
+
+	float aoutDutyCycles[4];
+
+	WaveformParameters aoutWaveformParameters[4];
+
+	////////////////////////////////////////////////////////////////////////////////
+
+	WaveformFunction doutWaveFormFunc[8];
+
+	float doutPhi[8];
+	float doutDphi[8];
+
+	float doutDutyCycles[8];
+
+	WaveformParameters doutWaveformParameters[8];
+
+	////////////////////////////////////////////////////////////////////////////////
+
+	TimerTickFunc tickFunc[10][3];
+	int tickFuncIndex;
+	int tickFuncM;
+	int tickFuncN;
+};
+
+State g_states[2];
+State *g_pCurrentState;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -169,27 +169,27 @@ WaveformFunction getWaveformFunction(WaveformParameters &waveformParameters) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void FuncGen_AOUT(int i) {
-	auto &waveformParameters = g_aoutWaveformParameters[i];
+	auto &waveformParameters = g_pCurrentState->aoutWaveformParameters[i];
 
-	g_dutyCycle = g_aoutDutyCycles[i];
+	g_dutyCycle = g_pCurrentState->aoutDutyCycles[i];
 	float value;
 	if (waveformParameters.waveform == WAVEFORM_DC) {
 		value = waveformParameters.amplitude;
 	} else {
-		value = waveformParameters.offset + waveformParameters.amplitude * g_aoutWaveFormFunc[i](g_aoutPhi[i]) / 2.0f;
+		value = waveformParameters.offset + waveformParameters.amplitude * g_pCurrentState->aoutWaveFormFunc[i](g_pCurrentState->aoutPhi[i]) / 2.0f;
 	}
 
-	g_aoutPhi[i] += g_aoutDphi[i];
-	if (g_aoutPhi[i] >= 2.0f * M_PI_F) {
-		g_aoutPhi[i] -= 2.0f * M_PI_F;
+	g_pCurrentState->aoutPhi[i] += g_pCurrentState->aoutDphi[i];
+	if (g_pCurrentState->aoutPhi[i] >= 2.0f * M_PI_F) {
+		g_pCurrentState->aoutPhi[i] -= 2.0f * M_PI_F;
 	}
 
-	value = 65535.0f * (value - g_aoutMin[i]) / (g_aoutMax[i] - g_aoutMin[i]);
+	value = 65535.0f * (value - g_pCurrentState->aoutMin[i] ) / g_pCurrentState->aoutScale[i];
 
 	if (i < 2) {
-		DAC_SetValue(i, value);
+		DAC_SetValue_FromFuncGen(i, value);
 	} else {
-		DACDual_SetValue(i - 2, value);
+		DACDual_SetValue_FromFuncGen(i - 2, value);
 	}
 }
 
@@ -227,27 +227,27 @@ void FuncGen_AOUT4() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void ADC_MeasureTickFromFuncGen() {
+void FuncGen_ADC() {
 	TIMING_BEGIN();
-	ADC_MeasureTickFromFuncGen(TIMER_PERIOD);
+	ADC_Tick(1.0f / 32000.0f);
 	TIMING_END(m_debugADC);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void FuncGen_DOUT(int i) {
-	auto &waveformParameters = g_doutWaveformParameters[i];
+	auto &waveformParameters = g_pCurrentState->doutWaveformParameters[i];
 
 	if (waveformParameters.waveform == WAVEFORM_NONE) {
 		return;
 	}
 
-	g_dutyCycle = g_doutDutyCycles[i];
-	float value = g_doutWaveFormFunc[i](g_doutPhi[i]);
+	g_dutyCycle = g_pCurrentState->doutDutyCycles[i];
+	float value = g_pCurrentState->doutWaveFormFunc[i](g_pCurrentState->doutPhi[i]);
 
-	g_doutPhi[i] += g_doutDphi[i];
-	if (g_doutPhi[i] >= 2.0f * M_PI_F) {
-		g_doutPhi[i] -= 2.0f * M_PI_F;
+	g_pCurrentState->doutPhi[i] += g_pCurrentState->doutDphi[i];
+	if (g_pCurrentState->doutPhi[i] >= 2.0f * M_PI_F) {
+		g_pCurrentState->doutPhi[i] -= 2.0f * M_PI_F;
 	}
 
 	Dout_SetPinState(i, value > 0.5f ? 1 : 0);
@@ -256,59 +256,614 @@ void FuncGen_DOUT(int i) {
 void FuncGen_DOUT() {
 	TIMING_BEGIN();
 
-	for (int i = 0; i < 8; i++) {
-		FuncGen_DOUT(i);
-	}
+	FuncGen_DOUT(0);
+	FuncGen_DOUT(1);
+	FuncGen_DOUT(2);
+	FuncGen_DOUT(3);
+	FuncGen_DOUT(4);
+	FuncGen_DOUT(5);
+	FuncGen_DOUT(6);
+	FuncGen_DOUT(7);
 
 	TIMING_END(m_debugDOUT);
+}
+
+void FuncGen_Void() {
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+static void initTickFuncs_dlog_ac_dout(State *pNewState, int dout, float &doutPeriod, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[0];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[0];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;
+		pNewState->tickFunc[5][0] = aoutFunc[1];
+
+		pNewState->tickFuncM = 6;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 6.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[0];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;
+		pNewState->tickFunc[5][0] = aoutFunc[1];
+		pNewState->tickFunc[6][0] = FuncGen_ADC;
+		pNewState->tickFunc[7][0] = aoutFunc[2];
+
+		pNewState->tickFuncM = 8;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 8.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[0];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;
+		pNewState->tickFunc[5][0] = aoutFunc[1];
+		pNewState->tickFunc[6][0] = FuncGen_ADC;
+		pNewState->tickFunc[7][0] = aoutFunc[2];
+		pNewState->tickFunc[8][0] = FuncGen_ADC;
+		pNewState->tickFunc[9][0] = aoutFunc[3];
+
+		pNewState->tickFuncM = 10;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 10.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 10.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 10.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 10.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 10.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_dlog_ac_aout(State *pNewState, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[1];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[1];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;
+		pNewState->tickFunc[5][0] = aoutFunc[2];
+
+		pNewState->tickFuncM = 6;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 6.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;
+		pNewState->tickFunc[3][0] = aoutFunc[1];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;
+		pNewState->tickFunc[5][0] = aoutFunc[2];
+		pNewState->tickFunc[6][0] = FuncGen_ADC;
+		pNewState->tickFunc[7][0] = aoutFunc[3];
+
+		pNewState->tickFuncM = 8;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 8.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_dlog_dout(State *pNewState, int dout, float &doutPeriod, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = FuncGen_DOUT; pNewState->tickFunc[3][1] = aoutFunc[1];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[1];  pNewState->tickFunc[3][1] = aoutFunc[2];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 4.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = FuncGen_DOUT; pNewState->tickFunc[3][1] = aoutFunc[1];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;  pNewState->tickFunc[4][1] = FuncGen_Void;
+		pNewState->tickFunc[5][0] = FuncGen_DOUT; pNewState->tickFunc[5][1] = aoutFunc[2];
+		pNewState->tickFunc[6][0] = FuncGen_ADC;  pNewState->tickFunc[6][1] = FuncGen_Void;
+		pNewState->tickFunc[7][0] = FuncGen_DOUT; pNewState->tickFunc[7][1] = aoutFunc[3];
+
+		pNewState->tickFuncM = 8;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 8.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_dlog_aout(State *pNewState, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+		pNewState->tickFunc[2][0] = FuncGen_ADC; pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[0]; pNewState->tickFunc[3][1] = aoutFunc[2];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 4.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+		pNewState->tickFunc[2][0] = FuncGen_ADC; pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[0]; pNewState->tickFunc[3][1] = aoutFunc[2];
+		pNewState->tickFunc[4][0] = FuncGen_ADC; pNewState->tickFunc[4][1] = FuncGen_Void;
+		pNewState->tickFunc[5][0] = aoutFunc[0]; pNewState->tickFunc[5][1] = aoutFunc[3];
+
+		pNewState->tickFuncM = 6;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 6.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_ac_dout(State *pNewState, int dout, float &doutPeriod, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = FuncGen_DOUT; pNewState->tickFunc[3][1] = aoutFunc[1];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[1];  pNewState->tickFunc[3][1] = aoutFunc[2];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 4.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;  pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0];
+		pNewState->tickFunc[2][0] = FuncGen_ADC;  pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = FuncGen_DOUT; pNewState->tickFunc[3][1] = aoutFunc[1];
+		pNewState->tickFunc[4][0] = FuncGen_ADC;  pNewState->tickFunc[4][1] = FuncGen_Void;
+		pNewState->tickFunc[5][0] = FuncGen_DOUT; pNewState->tickFunc[5][1] = aoutFunc[2];
+		pNewState->tickFunc[6][0] = FuncGen_ADC;  pNewState->tickFunc[6][1] = FuncGen_Void;
+		pNewState->tickFunc[7][0] = FuncGen_DOUT; pNewState->tickFunc[7][1] = aoutFunc[3];
+
+		pNewState->tickFuncM = 8;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 8.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 8.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_ac_aout(State *pNewState, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+		pNewState->tickFunc[2][0] = FuncGen_ADC; pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[0]; pNewState->tickFunc[3][1] = aoutFunc[2];
+
+		pNewState->tickFuncM = 4;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 4.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 4.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_ADC; pNewState->tickFunc[0][1] = FuncGen_Void;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1];
+		pNewState->tickFunc[2][0] = FuncGen_ADC; pNewState->tickFunc[2][1] = FuncGen_Void;
+		pNewState->tickFunc[3][0] = aoutFunc[0]; pNewState->tickFunc[3][1] = aoutFunc[2];
+		pNewState->tickFunc[4][0] = FuncGen_ADC; pNewState->tickFunc[4][1] = FuncGen_Void;
+		pNewState->tickFunc[5][0] = aoutFunc[0]; pNewState->tickFunc[5][1] = aoutFunc[3];
+
+		pNewState->tickFuncM = 6;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 6.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 6.0f * 1375.0f / 88000000.0f;
+	}
+}
+
+static void initTickFuncs_dout(State *pNewState, int dout, float &doutPeriod, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_DOUT; pNewState->tickFunc[0][1] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		doutPeriod = 1375.0f / 88000000.0f;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = FuncGen_DOUT; pNewState->tickFunc[0][1] = aoutFunc[0]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0]; pNewState->tickFunc[1][2] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		doutPeriod = 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = FuncGen_DOUT; pNewState->tickFunc[0][1] = aoutFunc[0]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[0]; pNewState->tickFunc[1][2] = aoutFunc[1];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		doutPeriod = 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = FuncGen_DOUT; pNewState->tickFunc[0][1] = aoutFunc[0]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_DOUT; pNewState->tickFunc[1][1] = aoutFunc[1]; pNewState->tickFunc[1][2] = aoutFunc[2];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		doutPeriod = 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 2.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = FuncGen_DOUT; pNewState->tickFunc[0][1] = aoutFunc[0]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[1];  pNewState->tickFunc[1][1] = aoutFunc[2]; pNewState->tickFunc[1][2] = aoutFunc[3];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		doutPeriod = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 2.0f * 1375.0f / 88000000.0f;
+	}
+
+}
+
+static void initTickFuncs_aout(State *pNewState, int aout, TimerTickFunc *aoutFunc, float *aoutPeriod) {
+	//
+	if (aout == 0) {
+		pNewState->tickFunc[0][0] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 1;
+	} else if (aout == 1) {
+		pNewState->tickFunc[0][0] = aoutFunc[0]; pNewState->tickFunc[0][1] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 2;
+
+		aoutPeriod[0] = 1375.0f / 88000000.0f;
+	} else if (aout == 2) {
+		pNewState->tickFunc[0][0] = aoutFunc[0]; pNewState->tickFunc[0][1] = aoutFunc[1]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1]; pNewState->tickFunc[1][2] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		aoutPeriod[0] = 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 1375.0f / 88000000.0f;
+	} else if (aout == 3) {
+		pNewState->tickFunc[0][0] = aoutFunc[0]; pNewState->tickFunc[0][1] = aoutFunc[1]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[0]; pNewState->tickFunc[1][1] = aoutFunc[1]; pNewState->tickFunc[1][2] = aoutFunc[2];
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		aoutPeriod[0] = 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 2.0f * 1375.0f / 88000000.0f;
+	} else {
+		pNewState->tickFunc[0][0] = aoutFunc[0]; pNewState->tickFunc[0][1] = aoutFunc[1]; pNewState->tickFunc[0][2] = FuncGen_ADC;
+		pNewState->tickFunc[1][0] = aoutFunc[2]; pNewState->tickFunc[1][1] = aoutFunc[3]; pNewState->tickFunc[1][2] = FuncGen_Void;
+
+		pNewState->tickFuncM = 2;
+		pNewState->tickFuncN = 3;
+
+		aoutPeriod[0] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[1] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[2] = 2.0f * 1375.0f / 88000000.0f;
+		aoutPeriod[3] = 2.0f * 1375.0f / 88000000.0f;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void FuncGen_Setup() {
 	TIM7->PSC = 0;
+	TIM7->ARR = 1375 - 1; // 64 KSPS -> 88,000,000 / 64,000 = 1375
 }
 
-void FuncGen_SetParams(SetParams &newState) {
-	float ticks = TICKS_RESERVE + TICKS_ADC + TICKS_DOUT_FIXED;
+void FuncGen_SetParams(SetParams &newParams) {
+	State *pNewState = g_pCurrentState == g_states ? g_states + 1 : g_states;
 
-	for (int i = 0; i < 4; i++) {
-		auto &waveformParameters = newState.aoutWaveformParameters[i];
+	TimerTickFunc aoutFunc[4];
+
+	int aout = 0;
+	if (newParams.aoutWaveformParameters[0].waveform != WAVEFORM_NONE) {
+		aoutFunc[aout++] = FuncGen_AOUT1;
+	}
+	if (newParams.aoutWaveformParameters[1].waveform != WAVEFORM_NONE) {
+		aoutFunc[aout++] = FuncGen_AOUT2;
+	}
+	if (newParams.aoutWaveformParameters[2].waveform != WAVEFORM_NONE) {
+		aoutFunc[aout++] = FuncGen_AOUT3;
+	}
+	if (newParams.aoutWaveformParameters[3].waveform != WAVEFORM_NONE) {
+		aoutFunc[aout++] = FuncGen_AOUT4;
+	}
+
+	bool dout = false;
+	for (int i = 0; i < 8; i++) {
+		auto &waveformParameters = newParams.doutWaveformParameters[i];
 		if (waveformParameters.waveform != WAVEFORM_NONE) {
-			ticks += TICKS_AOUT;
+			dout = true;
+			break;
 		}
 	}
+
+	float doutPeriod = 0.0f;
+	float aoutPeriod[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+	if (ADC_DLOG_started || DIN_DLOG_started) {
+		if (newParams.acAnalysisEnabled) {
+			if (dout) {
+				initTickFuncs_dlog_ac_dout(pNewState, dout, doutPeriod, aout, aoutFunc, aoutPeriod);
+			} else {
+				initTickFuncs_dlog_ac_aout(pNewState, aout, aoutFunc, aoutPeriod);
+			}
+		} else {
+			if (dout) {
+				initTickFuncs_dlog_dout(pNewState, dout, doutPeriod, aout, aoutFunc, aoutPeriod);
+			} else {
+				initTickFuncs_dlog_aout(pNewState, aout, aoutFunc, aoutPeriod);
+			}
+		}
+	} else {
+		if (newParams.acAnalysisEnabled) {
+			if (dout) {
+				initTickFuncs_ac_dout(pNewState, dout, doutPeriod, aout, aoutFunc, aoutPeriod);
+			} else {
+				initTickFuncs_ac_aout(pNewState, aout, aoutFunc, aoutPeriod);
+			}
+		} else {
+			if (dout) {
+				initTickFuncs_dout(pNewState, dout, doutPeriod, aout, aoutFunc, aoutPeriod);
+			} else {
+				initTickFuncs_aout(pNewState, aout, aoutFunc, aoutPeriod);
+			}
+		}
+	}
+
+	int j = 0;
+	for (int i = 0; i < 4; i++) {
+		auto &waveformParameters = newParams.aoutWaveformParameters[i];
+
+		if (waveformParameters.waveform != WAVEFORM_NONE) {
+			DAC_SetRange(i, newParams);
+
+			pNewState->aoutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
+			pNewState->aoutDutyCycles[i] = g_dutyCycle;
+
+			pNewState->aoutPhi[i] = waveformParameters.phaseShift / 360.0f;
+			pNewState->aoutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * aoutPeriod[j++];
+
+			float min;
+			float max;
+			if (i < 2) {
+				DAC_GetValueRange(newParams.aout_dac7760[i].outputRange, min, max);
+			} else {
+				DACDual_GetValueRange(min, max);
+			}
+
+			pNewState->aoutMin[i] = min;
+			pNewState->aoutScale[i] = max - min;
+		}
+	}
+
+	memcpy(pNewState->aoutWaveformParameters, newParams.aoutWaveformParameters, sizeof(newParams.aoutWaveformParameters));
 
 	for (int i = 0; i < 8; i++) {
-		auto &waveformParameters = newState.doutWaveformParameters[i];
+		auto &waveformParameters = newParams.doutWaveformParameters[i];
+
 		if (waveformParameters.waveform != WAVEFORM_NONE) {
-			ticks += TICKS_DOUT_PER_DOUT;
+			pNewState->doutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
+			pNewState->doutDutyCycles[i] = g_dutyCycle;
+
+			pNewState->doutPhi[i] = waveformParameters.phaseShift / 360.0f;
+			pNewState->doutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * doutPeriod;
 		}
 	}
 
-	if (ADC_DLOG_started) {
-		ticks += TICKS_ADC_DLOG;
-	}
+	memcpy(pNewState->doutWaveformParameters, newParams.doutWaveformParameters, sizeof(newParams.doutWaveformParameters));
 
-	ticks = ceilf(ticks);
-
-	auto NEW_TIMER_PERIOD = (uint16_t)(ticks * 90.0);
-
-	auto timerPeriodChanged = NEW_TIMER_PERIOD != TIMER_PERIOD;
-	auto aoutParamsChanged = memcmp((void *)g_aoutWaveformParameters, newState.aoutWaveformParameters, sizeof(newState.aoutWaveformParameters)) != 0;
-	auto doutParamsChanged = memcmp(g_doutWaveformParameters, newState.doutWaveformParameters, sizeof(newState.doutWaveformParameters)) != 0;
-	if (!timerPeriodChanged && !aoutParamsChanged && !doutParamsChanged) {
-		return;
-	}
-
-	TIMER_PERIOD = NEW_TIMER_PERIOD;
+	pNewState->tickFuncIndex = 0;
 
 	HAL_TIM_Base_Stop_IT(&htim7);
 
-	__disable_irq();
-
+	g_pCurrentState = pNewState;
+	
 #ifdef DEBUG_TIMING
-	m_debugTicks = ticks;
 	m_debugAOUT1 = 0;
 	m_debugAOUT2 = 0;
 	m_debugAOUT3 = 0;
@@ -317,82 +872,17 @@ void FuncGen_SetParams(SetParams &newState) {
 	m_debugDOUT = 0;
 #endif
 
-	TimerTickFunc timerTickFunc[6];
-	int numTimerTickFuncs = 0;
-
-	if (newState.aoutWaveformParameters[0].waveform != WAVEFORM_NONE) {
-		timerTickFunc[numTimerTickFuncs++] = FuncGen_AOUT1;
-	}
-	if (newState.aoutWaveformParameters[1].waveform != WAVEFORM_NONE) {
-		timerTickFunc[numTimerTickFuncs++] = FuncGen_AOUT2;
-	}
-	if (newState.aoutWaveformParameters[2].waveform != WAVEFORM_NONE) {
-		timerTickFunc[numTimerTickFuncs++] = FuncGen_AOUT3;
-	}
-	if (newState.aoutWaveformParameters[3].waveform != WAVEFORM_NONE) {
-		timerTickFunc[numTimerTickFuncs++] = FuncGen_AOUT4;
-	}
-
-	timerTickFunc[numTimerTickFuncs++] = FuncGen_DOUT;
-	timerTickFunc[numTimerTickFuncs++] = ADC_MeasureTickFromFuncGen;
-
-	if (timerPeriodChanged || aoutParamsChanged) {
-		for (int i = 0; i < 4; i++) {
-			auto &waveformParameters = newState.aoutWaveformParameters[i];
-
-			if (waveformParameters.waveform != WAVEFORM_NONE) {
-				g_aoutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
-				g_aoutDutyCycles[i] = g_dutyCycle;
-
-				g_aoutPhi[i] = waveformParameters.phaseShift / 360.0f;
-				g_aoutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * TIMER_PERIOD / 90000000.0;
-
-				if (i < 2) {
-					DAC_GetValueRange(newState.aout_dac7760[i].outputRange, g_aoutMin[i], g_aoutMax[i]);
-				} else {
-					DACDual_GetValueRange(g_aoutMin[i], g_aoutMax[i]);
-				}
-			}
-		}
-
-		memcpy(g_aoutWaveformParameters, newState.aoutWaveformParameters, sizeof(newState.aoutWaveformParameters));
-	}
-
-	if (timerPeriodChanged || doutParamsChanged) {
-		for (int i = 0; i < 8; i++) {
-			auto &waveformParameters = newState.doutWaveformParameters[i];
-
-			if (waveformParameters.waveform != WAVEFORM_NONE) {
-				g_doutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
-				g_doutDutyCycles[i] = g_dutyCycle;
-
-				g_doutPhi[i] = waveformParameters.phaseShift / 360.0f;
-				g_doutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * TIMER_PERIOD / 90000000.0;
-			}
-		}
-
-		memcpy(g_doutWaveformParameters, newState.doutWaveformParameters, sizeof(newState.doutWaveformParameters));
-	}
-
-	memcpy(g_timerTickFunc, timerTickFunc, sizeof(timerTickFunc));
-	g_numTimerTickFuncs = numTimerTickFuncs;
-
-	__enable_irq();
-
-	TIM7->ARR = TIMER_PERIOD - 1;
 	HAL_TIM_Base_Start_IT(&htim7);
 }
 
 void FuncGen_onTimerPeriodElapsed() {
-	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-
 	TIMING_BEGIN();
 
-	for (int i = 0; i < g_numTimerTickFuncs; i++) {
-		g_timerTickFunc[i]();
+	for (int i = 0; i < g_pCurrentState->tickFuncN; i++) {
+		g_pCurrentState->tickFunc[g_pCurrentState->tickFuncIndex][i]();
 	}
 
-	TIMING_END(m_debugTotal);
+	g_pCurrentState->tickFuncIndex = (g_pCurrentState->tickFuncIndex + 1) % g_pCurrentState->tickFuncM;
 
-	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
+	TIMING_END(m_debugTotal);
 }

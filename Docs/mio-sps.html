@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <p>
+        <label><input id="AOUT1" type="checkbox" onchange="AOUT1_checked()"/> AOUT1</label>
+        <label><input id="AOUT2" type="checkbox" onchange="AOUT2_checked()"/> AOUT2</label>
+        <label><input id="AOUT3" type="checkbox" onchange="AOUT3_checked()"/> AOUT3</label>
+        <label><input id="AOUT4" type="checkbox" onchange="AOUT4_checked()"/> AOUT4</label>
+    </p>
+
+    <p>
+        <label><input id="DOUT" type="checkbox" onchange="DOUT_checked()"/> DOUT</label>
+    </p>
+
+    <p>
+        <label><input id="DLOG" type="checkbox" onchange="DLOG_checked()"/> DLOG active</label>
+    </p>
+    <p>
+        <label><input id="AC" type="checkbox" onchange="AC_checked()"/> AC analysis enabled</label>
+    </p>
+
+    <hr />
+
+    <p>
+        <p>DOUT sample rate: <span id="DOUT_SPS">-</span></p>
+        <p>ADC1 sample rate: <span id="AOUT1_SPS">-</span></p>
+        <p>ADC2 sample rate: <span id="AOUT2_SPS">-</span></p>
+        <p>ADC3 sample rate: <span id="AOUT3_SPS">-</span></p>
+        <p>ADC4 sample rate: <span id="AOUT4_SPS">-</span></p>
+    </p>
+
+    <p>
+        <p>DLOG sample rate: up to 32 KSPS</p>
+    </p>
+
+    <script>
+        var DLOG = false;
+        var AC = false;
+        var DOUT = false;
+        var AOUT1 = false;
+        var AOUT2 = false;
+        var AOUT3 = false;
+        var AOUT4 = false;
+
+        function DLOG_checked(event) {
+            DLOG = document.getElementById("DLOG").checked;
+            update();
+        }
+
+        function AC_checked() {
+            AC = document.getElementById("AC").checked;
+            update();
+        }
+
+        function DOUT_checked() {
+            DOUT = document.getElementById("DOUT").checked;
+            update();
+        }
+
+        function AOUT1_checked() {
+            AOUT1 = document.getElementById("AOUT1").checked;
+            update();
+        }
+
+        function AOUT2_checked() {
+            AOUT2 = document.getElementById("AOUT2").checked;
+            update();
+        }
+
+        function AOUT3_checked() {
+            AOUT3 = document.getElementById("AOUT3").checked;
+            update();
+        }
+
+        function AOUT4_checked() {
+            AOUT4 = document.getElementById("AOUT4").checked;
+            update();
+        }
+
+        function update() {
+            function calc_dlog_ac_dout() {
+                if (aout == 0) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 1) {
+                    doutPeriod = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    doutPeriod = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 6.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    doutPeriod = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 8.0 * 1375.0 / 88000000.0;
+                } else {
+                    doutPeriod = 10.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 10.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 10.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 10.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 10.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_dlog_ac_aout() {
+                if (aout == 0) {
+                } else if (aout == 1) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    aoutPeriod[0] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 6.0 * 1375.0 / 88000000.0;
+                } else {
+                    aoutPeriod[0] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 8.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_dlog_dout() {
+                if (aout == 0) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 1) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    doutPeriod = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 4.0 * 1375.0 / 88000000.0;
+                } else {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 8.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_dlog_aout() {
+                if (aout == 0) {
+                } else if (aout == 1) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 4.0 * 1375.0 / 88000000.0;
+                } else {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 6.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_ac_dout() {
+                if (aout == 0) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 1) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    doutPeriod = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 4.0 * 1375.0 / 88000000.0;
+                } else {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 8.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 8.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_ac_aout() {
+                if (aout == 0) {
+                } else if (aout == 1) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 4.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 4.0 * 1375.0 / 88000000.0;
+                } else {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 6.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 6.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_dout() {
+                if (aout == 0) {
+                    doutPeriod = 1375.0 / 88000000.0;
+                } else if (aout == 1) {
+                    doutPeriod = 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    doutPeriod = 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    doutPeriod = 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 2.0 * 1375.0 / 88000000.0;
+                } else {
+                    doutPeriod = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 2.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            function calc_aout() {
+                //
+                if (aout == 0) {
+                } else if (aout == 1) {
+                    aoutPeriod[0] = 1375.0 / 88000000.0;
+                } else if (aout == 2) {
+                    aoutPeriod[0] = 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 1375.0 / 88000000.0;
+                } else if (aout == 3) {
+                    aoutPeriod[0] = 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 2.0 * 1375.0 / 88000000.0;
+                } else {
+                    aoutPeriod[0] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[1] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[2] = 2.0 * 1375.0 / 88000000.0;
+                    aoutPeriod[3] = 2.0 * 1375.0 / 88000000.0;
+                }
+            }
+
+            var doutPeriod = NaN;
+
+            var aoutPeriod = [NaN, NaN, NaN, NaN];
+
+            var aoutId = [];
+
+            var aout = 0;
+
+            if (AOUT1) {
+                aoutId[aout++] = "AOUT1_SPS";
+            }
+       
+            if (AOUT2) {
+                aoutId[aout++] = "AOUT2_SPS";
+            }
+
+            if (AOUT3) {
+                aoutId[aout++] = "AOUT3_SPS";
+            }
+
+            if (AOUT4) {
+                aoutId[aout++] = "AOUT4_SPS";
+            }
+
+            if (DLOG) {
+                if (AC) {
+                    if (DOUT) {
+                        calc_dlog_ac_dout();
+                    } else {
+                        calc_ac_aout();
+                    }
+                } else {
+                    if (DOUT) {
+                        calc_dlog_dout();
+                    } else {
+                        calc_dlog_aout();
+                    }
+                }
+            } else {
+                if (AC) {
+                    if (DOUT) {
+                        calc_ac_dout();
+                    } else {
+                        calc_ac_aout();
+                    }
+                } else {
+                    if (DOUT) {
+                        calc_dout();
+                    } else {
+                        calc_aout();
+                    }
+                }
+            }
+
+            document.getElementById("DOUT_SPS").innerHTML = !isNaN(doutPeriod) ? 1 / doutPeriod : "-";
+            
+            document.getElementById("AOUT1_SPS").innerHTML = "-";
+            document.getElementById("AOUT2_SPS").innerHTML = "-";
+            document.getElementById("AOUT3_SPS").innerHTML = "-";
+            document.getElementById("AOUT4_SPS").innerHTML = "-";
+
+            for (var i = 0; i < aout; i++) {
+                document.getElementById(aoutId[i]).innerHTML = !isNaN(aoutPeriod[i]) ? 1 / aoutPeriod[i] : "-";
+            }
+        }
+    </script>
+</body>
+</html>

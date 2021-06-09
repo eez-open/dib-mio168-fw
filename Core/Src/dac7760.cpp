@@ -36,40 +36,6 @@ void DAC_Setup(int i) {
 	DAC_SpiWrite(i, DAC7760_DATA_REGISTER, 0, 0);
 }
 
-//auto DR = (__IO uint8_t *)&hspi2.Instance->DR;
-//
-//static void SPI_Transmit(uint8_t *pData) {
-//	/* Wait until TXE flag is set to send data */
-//	while (!(SPI2->SR & SPI_FLAG_TXE))
-//	*DR = *pData++;
-//
-//	/* Wait until TXE flag is set to send data */
-//	while (!(SPI2->SR & SPI_FLAG_TXE))
-//	*DR = *pData++;
-//
-//	/* Wait until TXE flag is set to send data */
-//	while (!(SPI2->SR & SPI_FLAG_TXE))
-//	*DR = *pData++;
-//
-//	__HAL_SPI_CLEAR_OVRFLAG(&hspi2);
-//}
-
-void DAC_SpiWriteFast(int i, uint8_t b0, uint8_t b1, uint8_t b2) {
-    uint8_t buf[3] = { b0, b1, b2 };
-
-    if (i == 0) {
-    	RESET_PIN(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin);
-    	//SPI_Transmit(buf);
-    	HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
-    	SET_PIN(DAC_CS_1_GPIO_Port, DAC_CS_1_Pin);
-    } else {
-        RESET_PIN(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin);
-        //SPI_Transmit(buf);
-        HAL_SPI_Transmit(hspiDAC, buf, 3, 100);
-        SET_PIN(DAC_CS_2_GPIO_Port, DAC_CS_2_Pin);
-    }
-}
-
 void DAC_GetValueRange(uint8_t outputRange, float &min, float &max) {
 	if (outputRange == 0) {
 		min = 0;
@@ -105,7 +71,9 @@ float DAC_ValueToDacValue(uint8_t outputRange, float value) {
 	return 65535.0f * (value - min) / (max - min);
 }
 
-void DAC_SetValue(int i, float value) {
+void DAC_SetValue_FromFuncGen(int i, float value) {
+	currentState.aout_dac7760[i].outputValue = value;
+
 	uint16_t dacValue;
 
 	if (value < 0) {
@@ -116,14 +84,44 @@ void DAC_SetValue(int i, float value) {
 		dacValue = roundf(value);
 	}
 
-	DAC_SpiWriteFast(i, DAC7760_DATA_REGISTER, dacValue >> 8, dacValue & 0xFF);
+    GPIO_TypeDef* ports[] = { DAC_CS_1_GPIO_Port, DAC_CS_2_GPIO_Port };
+    uint16_t pins[] = { DAC_CS_1_Pin, DAC_CS_2_Pin };
+
+	RESET_PIN(ports[i], pins[i]);
+
+	static auto DR = (__IO uint8_t *)&hspi2.Instance->DR;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = DAC7760_DATA_REGISTER;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = dacValue >> 8;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_TXE) != SPI_FLAG_TXE);
+	*DR = dacValue & 0xFF;
+
+	while ((hspi2.Instance->SR & SPI_FLAG_BSY) == SPI_FLAG_BSY);
+
+	SET_PIN(ports[i], pins[i]);
 }
 
 void DAC_SetValue(int i, uint8_t outputRange, float value) {
-	DAC_SetValue(i, DAC_ValueToDacValue(outputRange, value));
+	value = DAC_ValueToDacValue(outputRange, value);
+
+	uint16_t dacValue;
+
+	if (value < 0) {
+		dacValue = 0;
+	} else if (value > 65535.0f) {
+		dacValue = 65535;
+	} else {
+		dacValue = roundf(value);
+	}
+
+	DAC_SpiWrite(i, DAC7760_DATA_REGISTER, dacValue >> 8, dacValue & 0xFF);
 }
 
-void DAC_SetParams(int i, SetParams &newState) {
+void DAC_SetRange(int i, SetParams &newState) {
 	uint8_t newOutputEnabled = newState.aout_dac7760[i].outputEnabled;
 	uint8_t newOutputRange = newState.aout_dac7760[i].outputRange;
 	if (
@@ -140,13 +138,18 @@ void DAC_SetParams(int i, SetParams &newState) {
 
 		DAC_SpiWrite(i, DAC7760_CONTROL_REGISTER, controlRegister >> 8, controlRegister & 0xFF);
 	}
+}
 
-	float newOutputValue = newState.aout_dac7760[i].outputValue;
-	if (
-		newOutputValue != currentState.aout_dac7760[i].outputValue ||
-		newOutputRange != currentState.aout_dac7760[i].outputRange
-	) {
-		if (newState.aoutWaveformParameters[i].waveform == WAVEFORM_NONE) {
+void DAC_SetParams(int i, SetParams &newState) {
+	if (newState.aoutWaveformParameters[i].waveform == WAVEFORM_NONE) {
+		DAC_SetRange(i, newState);
+
+		uint8_t newOutputRange = newState.aout_dac7760[i].outputRange;
+		float newOutputValue = newState.aout_dac7760[i].outputValue;
+		if (
+			newOutputValue != currentState.aout_dac7760[i].outputValue ||
+			newOutputRange != currentState.aout_dac7760[i].outputRange
+		) {
 			DAC_SetValue(i, newOutputRange, newOutputValue);
 		}
 	}

@@ -41,9 +41,8 @@ volatile static bool ADC_dataReady = false;
 
 static uint8_t ADC_tx[16] = { 0x12 };
 
-static uint8_t ADC_rxBuffer[16 * 16];
-static uint8_t *ADC_rx = ADC_rxBuffer;
-static uint8_t *ADC_rxNext;
+static uint8_t ADC_rx[16];
+static uint8_t ADC_rxNext[16];
 
 int ADC_ksps;
 float ADC_period;
@@ -617,7 +616,9 @@ void ADC_Setup() {
 	__HAL_SPI_ENABLE(hspiADC);
 
 	ADC_SwReset_Command();
+	HAL_Delay(1);
 	ADC_WakeUp_Command();
+	HAL_Delay(1);
 	ADC_StopReadContinuous_Command();
 
 	////////////////////////////////////////
@@ -778,11 +779,6 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 	ADC_StartMeasuring();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//
-// ADC measure
-//
-
 void ADC_GetSamples(float *samples) {
 	if (g_afeVersion != 4) {
 		if (IS_24_BIT) {
@@ -799,7 +795,11 @@ void ADC_GetSamples(float *samples) {
 	}
 }
 
-void ADC_AfterMeasure(float period) {
+void ADC_Tick(float period) {
+	if (!ADC_dataReady) {
+		return;
+	}
+
 	uint8_t *rx = ADC_rx + 1;
 
 	ADC_faultStatus = ((rx[0] << 16) | (rx[1] << 8) | rx[2]) >> 4;
@@ -863,62 +863,36 @@ void ADC_AfterMeasure(float period) {
 		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOG, GPIO_PIN_15) << 1);
 	}
 
-	powerCalc(ADC_ch, period);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-//
-// DMA version
-//
-
-inline void ADC_Measure_Start() {
-	g_DMA = 1;
-	//RESET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-	RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-
-	ADC_rxNext = ADC_rx + 16;
-	if (ADC_rxNext >= ADC_rxBuffer + sizeof(ADC_rxBuffer)) {
-		ADC_rxNext = ADC_rxBuffer;
-	}
-
-	if (IS_24_BIT) {
-		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 16);
-	} else {
-		HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 12);
-	}
-}
-
-void ADC_DMA_TransferCompleted(bool ok) {
-	if (ok) {
-		ADC_dataReady = true;
-		ADC_rx = ADC_rxNext;
-	}
-
-	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
-	//SET_PIN(DOUT0_GPIO_Port, DOUT0_Pin);
-	g_DMA = 0;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-void ADC_MeasureTick() {
-	if (ADC_measureStarted) {
-		if (g_DMA == 1) {
-			//HAL_SPI_Abort(hspiADC);
-		} else {
-			ADC_Measure_Start();
-		}
-	}
-}
-
-void ADC_MeasureTickFromFuncGen(float period) {
-	if (ADC_dataReady) {
-		ADC_AfterMeasure(period);
+	if (currentState.acAnalysisEnabled) {
+		powerCalc(ADC_ch, period);
 	}
 }
 
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == ADC_DRDY_Pin) {
-		ADC_MeasureTick();
+		if (ADC_measureStarted) {
+			if (g_DMA == 1) {
+				//HAL_SPI_Abort(hspiADC);
+			} else {
+				g_DMA = 1;
+				RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+
+				if (IS_24_BIT) {
+					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 16);
+				} else {
+					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 12);
+				}
+			}
+		}
 	}
+}
+
+void ADC_DMA_TransferCompleted(bool ok) {
+	if (ok) {
+		memcpy(ADC_rx, ADC_rxNext, sizeof(ADC_rxNext));
+		ADC_dataReady = true;
+	}
+
+	SET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
+	g_DMA = 0;
 }
