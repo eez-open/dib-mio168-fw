@@ -825,7 +825,9 @@ void FuncGen_SetParams(SetParams &newParams) {
 			pNewState->aoutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
 			pNewState->aoutDutyCycles[i] = g_dutyCycle;
 
-			pNewState->aoutPhi[i] = waveformParameters.phaseShift / 360.0f;
+			if (g_pCurrentState->aoutWaveformParameters[i].waveform == WAVEFORM_NONE || g_pCurrentState->aoutWaveformParameters[i].phaseShift == waveformParameters.phaseShift) {
+				pNewState->aoutPhi[i] = 2.0 * M_PI * waveformParameters.phaseShift / 360.0f;
+			}
 			pNewState->aoutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * aoutPeriod[j++];
 
 			float min;
@@ -850,7 +852,9 @@ void FuncGen_SetParams(SetParams &newParams) {
 			pNewState->doutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
 			pNewState->doutDutyCycles[i] = g_dutyCycle;
 
-			pNewState->doutPhi[i] = waveformParameters.phaseShift / 360.0f;
+			if (g_pCurrentState->doutWaveformParameters[i].waveform == WAVEFORM_NONE || g_pCurrentState->doutWaveformParameters[i].phaseShift == waveformParameters.phaseShift) {
+				pNewState->doutPhi[i] = 2.0 * M_PI * waveformParameters.phaseShift / 360.0f;
+			}
 			pNewState->doutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * doutPeriod;
 		}
 	}
