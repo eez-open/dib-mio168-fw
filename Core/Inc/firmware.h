@@ -246,6 +246,18 @@ inline double getAinConversionFactor(uint8_t afeVersion, uint8_t channelIndex, u
                 return 2.4 / 0.01 / 12; // +/- 10 A (0.01 ohm, PGA is 12)
             }
         }
+    }  else if (afeVersion == 2) {
+        if (channelIndex == 0 || channelIndex == 1) {
+            if (range == 0) {
+                return -3.0 * 2.4 / 2.24; // +/- 3 V (3 V is 2.24 V)
+            }
+            return -12.0 * 2.4 / 2.0; // +/- 12 V (12 V is 2.0 V)
+        } else {
+            if (range == 0) {
+                return -2.4 / 833.3; // +/- 2.4 mA (833.3 ohm, PGA is 1)
+            }
+            return 2.4 / 2.11; // +/- 2 A (2.11 ohm, PGA is 1)
+        }
     } else if (afeVersion == 3) {
         if (channelIndex == 0) {
             if (range == 0) {

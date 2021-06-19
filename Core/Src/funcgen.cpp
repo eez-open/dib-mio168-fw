@@ -825,7 +825,7 @@ void FuncGen_SetParams(SetParams &newParams) {
 			pNewState->aoutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
 			pNewState->aoutDutyCycles[i] = g_dutyCycle;
 
-			if (waveformParameters.resetPhase) {
+			if (1 || waveformParameters.resetPhase) {
 				pNewState->aoutPhi[i] = 2.0 * M_PI * waveformParameters.phaseShift / 360.0f;
 			}
 			pNewState->aoutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * aoutPeriod[j++];
@@ -852,7 +852,7 @@ void FuncGen_SetParams(SetParams &newParams) {
 			pNewState->doutWaveFormFunc[i] = getWaveformFunction(waveformParameters);
 			pNewState->doutDutyCycles[i] = g_dutyCycle;
 
-			if (waveformParameters.resetPhase) {
+			if (1 || waveformParameters.resetPhase) {
 				pNewState->doutPhi[i] = 2.0 * M_PI * waveformParameters.phaseShift / 360.0f;
 			}
 			pNewState->doutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * doutPeriod;

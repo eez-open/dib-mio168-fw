@@ -5,6 +5,7 @@ void ADC_SetParams(SetParams &newState);
 
 extern uint16_t ADC_faultStatus;
 extern uint8_t ADC_diagStatus;
+extern uint8_t ADC_autoRange;
 void ADC_GetSamples(float *samples);
 
 extern SPI_HandleTypeDef *hspiADC;

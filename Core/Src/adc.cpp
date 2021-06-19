@@ -21,6 +21,7 @@ SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 float ADC_samples[4];
 uint16_t ADC_faultStatus;
 uint8_t ADC_diagStatus;
+uint8_t ADC_autoRange;
 
 static const uint64_t ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES = 25 * (1000 / 50);
 static MovingAverage<int32_t, int64_t, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
@@ -39,10 +40,13 @@ static struct {
 volatile static bool ADC_measureStarted = false;
 volatile static bool ADC_dataReady = false;
 
-static uint8_t ADC_tx[16] = { 0x12 };
+static uint8_t ADC_tx[22] = { 0x12 };
 
-static uint8_t ADC_rx[16];
-static uint8_t ADC_rxNext[16];
+static uint8_t ADC_rx[22];
+static uint8_t ADC_rxNext[22];
+
+static uint32_t ADC_PacketSize_24bit = 16;
+static uint32_t ADC_PacketSize_16bit = 12;
 
 int ADC_ksps;
 float ADC_period;
@@ -112,7 +116,18 @@ void powerCalc(int32_t *ADC_ch, float period) {
 
 		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
 		curr = remap(curr, ADC_calPoints[2].p1CalX, ADC_calPoints[2].p1CalY, ADC_calPoints[2].p2CalX, ADC_calPoints[2].p2CalY);
-	}  else if (g_afeVersion == 3) {
+	} else if (g_afeVersion == 2) {
+		if (IS_24_BIT) {
+			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
+			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 23));
+		} else {
+			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
+			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 15));
+		}
+
+		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
+		curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+	} else if (g_afeVersion == 3) {
 		if (IS_24_BIT) {
 			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
 			curr = float(ADC_factor[1] * ADC_ch[1] / (1 << 23));
@@ -361,7 +376,7 @@ void ADC_UpdateChannel(
 	uint8_t channelIndex, uint8_t mode, uint8_t range, uint16_t numSamples,
 	float p1CalX, float p1CalY, float p2CalX, float p2CalY
 ) {
-	uint8_t pga = 0b0001'0000;
+	uint8_t pga = 0b0001'0000; // x1
 
 	if (g_afeVersion == 1) {
 		if (channelIndex == 2 || channelIndex == 3) {
@@ -496,6 +511,16 @@ void ADC_UpdateChannel(
 				}
 			}
 		}
+	} else if (g_afeVersion == 2) {
+		if (channelIndex == 0) {
+			ADC_Pin_SetState(0, ISEL_MID_3_GPIO_Port, ISEL_MID_3_Pin, range == 1);
+		} else if (channelIndex == 1) {
+			ADC_Pin_SetState(1, ISEL_MID_4_GPIO_Port, ISEL_MID_4_Pin, range == 1);
+		} else if (channelIndex == 2) {
+			ADC_Pin_SetState(2, ISEL_1_GPIO_Port, ISEL_1_Pin, range == 1);
+		} else {
+			ADC_Pin_SetState(3, ISEL_2_GPIO_Port, ISEL_2_Pin, range == 1);
+		}
 	} else if (g_afeVersion == 3) {
 		if (channelIndex == 0) {
 			ADC_Pin_SetState(0, USEL1_1_GPIO_Port, USEL1_1_Pin, range == 1);
@@ -613,6 +638,22 @@ void ADC_Setup() {
 		return;
 	}
 
+	if (g_afeVersion == 2) {
+		ADC_PacketSize_24bit = 16 + 6;
+		ADC_PacketSize_16bit = 12 + 4;
+
+		GPIO_InitTypeDef GPIO_InitStruct = {0};
+	
+  		GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  		GPIO_InitStruct.Pull = GPIO_NOPULL;
+
+  		GPIO_InitStruct.Pin = GPIO_PIN_5;
+  		HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  		GPIO_InitStruct.Pin = GPIO_PIN_2;
+  		HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  	}
+
 	__HAL_SPI_ENABLE(hspiADC);
 
 	ADC_SwReset_Command();
@@ -635,15 +676,19 @@ void ADC_Setup() {
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
 		uint8_t mode =
 			g_afeVersion == 1 ? MEASURE_MODE_VOLTAGE :
+			g_afeVersion == 2 ? (
+					channelIndex == 0 || channelIndex == 1 ? MEASURE_MODE_CURRENT : MEASURE_MODE_VOLTAGE
+			) :
 			g_afeVersion == 3 ? (
 					channelIndex == 1 ? MEASURE_MODE_CURRENT : MEASURE_MODE_VOLTAGE
-			) :
+			):
 			MEASURE_MODE_VOLTAGE;
 
 		uint8_t range =
 			g_afeVersion == 1 ? (
 				channelIndex == 0 || channelIndex == 1 ? 2 : 1
 			) :
+			g_afeVersion == 2 ? 1 :
 			g_afeVersion == 3 ? (
 				channelIndex == 0 ? 1 :
 				channelIndex == 1 ? 1 :
@@ -835,16 +880,50 @@ void ADC_Tick(float period) {
 
 	int32_t ADC_ch[4];
 
+	if (g_afeVersion == 2) {
+		ADC_autoRange = READ_PIN(GPIOD, GPIO_PIN_5) | (READ_PIN(GPIOC, GPIO_PIN_2) << 1);
+	}
+
 	if (IS_24_BIT) {
 		ADC_ch[0] = ((int32_t)((rx[0] << 24) | (rx[ 1] << 16) | (rx[ 2] << 8))) >> 8;
 		ADC_ch[1] = ((int32_t)((rx[3] << 24) | (rx[ 4] << 16) | (rx[ 5] << 8))) >> 8;
-		ADC_ch[2] = ((int32_t)((rx[6] << 24) | (rx[ 7] << 16) | (rx[ 8] << 8))) >> 8;
-		ADC_ch[3] = ((int32_t)((rx[9] << 24) | (rx[10] << 16) | (rx[11] << 8))) >> 8;
+
+		if (g_afeVersion == 2) {
+			if (currentState.ain[2].range == 1) {
+				ADC_ch[2] = ((int32_t)((rx[6] << 24) | (rx[ 7] << 16) | (rx[ 8] << 8))) >> 8;
+			} else {
+				ADC_ch[2] = ((int32_t)((rx[12] << 24) | (rx[13] << 16) | (rx[14] << 8))) >> 8;
+			}
+
+			if (currentState.ain[3].range == 1) {
+				ADC_ch[3] = ((int32_t)((rx[9] << 24) | (rx[10] << 16) | (rx[11] << 8))) >> 8;
+			} else {
+				ADC_ch[3] = ((int32_t)((rx[15] << 24) | (rx[16] << 16) | (rx[17] << 8))) >> 8;
+			}
+		} else {
+			ADC_ch[2] = ((int32_t)((rx[6] << 24) | (rx[ 7] << 16) | (rx[ 8] << 8))) >> 8;
+			ADC_ch[3] = ((int32_t)((rx[9] << 24) | (rx[10] << 16) | (rx[11] << 8))) >> 8;
+		}
 	} else {
 		ADC_ch[0] = int16_t((rx[0] << 8) | rx[1]);
 		ADC_ch[1] = int16_t((rx[2] << 8) | rx[3]);
-		ADC_ch[2] = int16_t((rx[4] << 8) | rx[5]);
-		ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
+
+		if (g_afeVersion == 2) {
+			if (currentState.ain[2].range == 1) {
+				ADC_ch[2] = int16_t((rx[4] << 8) | rx[5]);
+			} else {
+				ADC_ch[2] = int16_t((rx[8] << 8) | rx[9]);
+			}
+
+			if (currentState.ain[3].range == 1) {
+				ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
+			} else {
+				ADC_ch[3] = int16_t((rx[10] << 8) | rx[11]);
+			}
+		} else {
+			ADC_ch[2] = int16_t((rx[4] << 8) | rx[5]);
+			ADC_ch[3] = int16_t((rx[6] << 8) | rx[7]);
+		}
 	}
 
 	// 1ksps
@@ -878,9 +957,9 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 				RESET_PIN(ADC_CS_GPIO_Port, ADC_CS_Pin);
 
 				if (IS_24_BIT) {
-					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 16);
+					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, ADC_PacketSize_24bit);
 				} else {
-					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, 12);
+					HAL_SPI_TransmitReceive_DMA(hspiADC, ADC_tx, ADC_rxNext, ADC_PacketSize_16bit);
 				}
 			}
 		}
