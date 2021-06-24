@@ -94,7 +94,7 @@ void Command_GetState(Request &request, Response &response) {
 
 	response.getState.dinStates = Din_readDataInputs();
 
-	ADC_GetSamples(response.getState.ainValues);
+	ADC_GetSamples(response.getState.ainValues, response.getState.ainRange);
 	response.getState.ainFaultStatus = ADC_faultStatus;
 	response.getState.ainDiagStatus = ADC_diagStatus;
 
@@ -204,10 +204,14 @@ extern "C" void setup() {
 		// DIAG#1 and DIAG#2
 		GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
-		GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
 		GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
 		GPIO_InitStruct.Pull = GPIO_PULLUP;
+
+		GPIO_InitStruct.Pin = GPIO_PIN_14;
 		HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+		GPIO_InitStruct.Pin = GPIO_PIN_15;
+		HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 	}
 
 	Din_Setup();
@@ -243,6 +247,9 @@ extern "C" void loop() {
 //			break;
 //		}
 		//DIN_DLOG_LoopWrite();
+		if (!ADC_DLOG_started) {
+			ADC_autoRange();
+		}
 	}
 
     Request &request = *(Request *)input;

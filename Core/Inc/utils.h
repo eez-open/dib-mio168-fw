@@ -40,6 +40,10 @@ public:
     	return m_N;
     }
 
+    uint64_t getNumSamples() {
+    	return m_numSamples;
+    }
+
 private:
     uint16_t m_N{1};
     T m_samples[MAX_N];

@@ -85,10 +85,10 @@ struct SetParams {
 		uint8_t mode; // enum SourceMode
 		uint8_t range;
         float nplc; // from 0 to 25
-        float p1CalX;
-        float p1CalY;
-        float p2CalX;
-        float p2CalY;
+        float p1CalX[3];
+        float p1CalY[3];
+        float p2CalX[3];
+        float p2CalY[3];
     } ain[4];
 
     uint8_t acAnalysisEnabled;
@@ -171,6 +171,7 @@ struct Response {
             uint8_t flags; // GET_STATE_COMMAND_FLAG_...
             uint8_t dinStates;
             float ainValues[4];
+            uint8_t ainRange[4];
             uint16_t ainFaultStatus;
             uint8_t ainDiagStatus;
             float activePower;

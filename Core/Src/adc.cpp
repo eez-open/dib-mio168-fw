@@ -10,6 +10,9 @@
 
 static const int DEFAULT_SAMPLE_RATE_KSPS = 16;
 
+uint32_t g_debugVar1;
+uint32_t g_debugVar2;
+
 ////////////////////////////////////////////////////////////////////////////////
 
 static uint32_t ADC_DLOG_RECORD_SIZE_24_BIT = 14;
@@ -21,7 +24,11 @@ SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 float ADC_samples[4];
 uint16_t ADC_faultStatus;
 uint8_t ADC_diagStatus;
-uint8_t ADC_autoRange;
+uint8_t ADC_autoRangeAFE2;
+
+static const uint64_t ADC_AUTO_RANGE_MIN_SAMPLES = 1;
+static const float ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD = 0.95;
+static uint8_t ADC_AutoRange_currentRange[4];
 
 static const uint64_t ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES = 25 * (1000 / 50);
 static MovingAverage<int32_t, int64_t, ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES> g_adcMovingAverage[4];
@@ -36,6 +43,9 @@ static struct {
 	float p2CalX;
 	float p2CalY;
 } ADC_calPoints[4];
+
+static float *g_samples;
+static uint8_t *g_ranges;
 
 volatile static bool ADC_measureStarted = false;
 volatile static bool ADC_dataReady = false;
@@ -374,13 +384,28 @@ void ADC_Relays_SetState(
 
 void ADC_UpdateChannel(
 	uint8_t channelIndex, uint8_t mode, uint8_t range, uint16_t numSamples,
-	float p1CalX, float p1CalY, float p2CalX, float p2CalY
+	float *p1CalX, float *p1CalY, float *p2CalX, float *p2CalY
 ) {
 	uint8_t pga = 0b0001'0000; // x1
 
 	if (g_afeVersion == 1) {
-		if (channelIndex == 2 || channelIndex == 3) {
-			if (mode == MEASURE_MODE_CURRENT) {
+		if (channelIndex == 0 || channelIndex == 1) {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 3) {
+					range = 2;
+				}
+			} else {
+			}
+		} else {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 2) {
+					range = 1;
+				}
+			} else {
+				if (range == 3) {
+					range = 2;
+				}
+
 				if (range == 1) {
 					pga = 0b0100'0000; // x4
 				} else if (range == 2) {
@@ -389,11 +414,27 @@ void ADC_UpdateChannel(
 			}
 		}
 	} else if (g_afeVersion == 3) {
-		if (channelIndex == 1) {
+		if (channelIndex == 0) {
+			if (range == 2) {
+				range = 1;
+			}
+		} else if (channelIndex == 1) {
+			if (range == 2) {
+				range = 1;
+			}
+
 			if (range == 1) {
 				pga = 0b0010'0000; // x2
 			}
-		} else if (channelIndex == 3) {
+		} else if (channelIndex == 2) {
+			if (range == 3) {
+				range = 2;
+			}
+		} else {
+			if (range == 3) {
+				range = 2;
+			}
+
 			if (mode == MEASURE_MODE_CURRENT) {
 				if (range == 1) {
 					pga = 0b0100'0000; // x4
@@ -403,6 +444,8 @@ void ADC_UpdateChannel(
 			}
 		}
 	}
+
+	ADC_AutoRange_currentRange[channelIndex] = range;
 
 	ADC_pga[channelIndex] = pga;
 
@@ -599,10 +642,10 @@ void ADC_UpdateChannel(
 	//
 	ADC_factor[channelIndex] = getAinConversionFactor(g_afeVersion, channelIndex, mode, range);
 
-	ADC_calPoints[channelIndex].p1CalX = p1CalX;
-	ADC_calPoints[channelIndex].p1CalY = p1CalY;
-	ADC_calPoints[channelIndex].p2CalX = p2CalX;
-	ADC_calPoints[channelIndex].p2CalY = p2CalY;
+	ADC_calPoints[channelIndex].p1CalX = p1CalX[range];
+	ADC_calPoints[channelIndex].p1CalY = p1CalY[range];
+	ADC_calPoints[channelIndex].p2CalX = p2CalX[range];
+	ADC_calPoints[channelIndex].p2CalY = p2CalY[range];
 
 	g_adcMovingAverage[channelIndex].reset(numSamples);
 
@@ -700,7 +743,12 @@ void ADC_Setup() {
 		currentState.ain[channelIndex].mode = mode;
 		currentState.ain[channelIndex].range = range;
 
-		ADC_UpdateChannel(channelIndex, mode, range, 1, 0, 0, 1, 1);
+        float p1CalX[3] = {0, 0, 0};
+        float p1CalY[3] = {0, 0, 0};
+        float p2CalX[3] = {1, 1, 1};
+        float p2CalY[3] = {1, 1, 1};
+
+		ADC_UpdateChannel(channelIndex, mode, range, 1, p1CalX, p1CalY, p2CalX, p2CalY);
 	}
 
 	////////////////////////////////////////
@@ -789,6 +837,252 @@ void ADC_SetParams(SetParams &newState) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+void ADC_AutoRange_setRange(int channelIndex, uint8_t range) {
+	g_debugVar1 = 1;
+
+	uint8_t ADC_pga_before = ADC_pga[channelIndex];
+
+	ADC_StopMeasuring();
+
+	uint16_t numSamples = (uint16_t)roundf(currentState.ain[channelIndex].nplc * (1000.0f / currentState.powerLineFrequency));
+	if (numSamples < 1) {
+		numSamples = 1;
+	}
+	if (numSamples > ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES) {
+		numSamples = ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES;
+	}
+
+	ADC_UpdateChannel(
+		channelIndex,
+		currentState.ain[channelIndex].mode,
+		range,
+		numSamples,
+		currentState.ain[channelIndex].p1CalX,
+		currentState.ain[channelIndex].p1CalY,
+		currentState.ain[channelIndex].p2CalX,
+		currentState.ain[channelIndex].p2CalY
+	);
+
+	// recalc offset if PGA changed
+	if (ADC_pga_before != ADC_pga[channelIndex]) {
+		ADC_OffsetCalc_Command();
+	}
+
+	ADC_StartMeasuring();
+
+	g_debugVar1 = 0;
+}
+
+bool ADC_AutoRange_TestLowest(float value, int channelIndex, uint8_t currentRange, float valueLowest) {
+	if (ADC_AutoRange_currentRange[channelIndex] != currentRange) {
+		return false;
+	}
+
+	if (value <= ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD * valueLowest) {
+		ADC_AutoRange_setRange(channelIndex, currentRange - 2);
+		return true;
+	}
+
+	return false;
+}
+
+bool ADC_AutoRange_TestLower(float value, int channelIndex, uint8_t currentRange, float valueLower) {
+	if (ADC_AutoRange_currentRange[channelIndex] != currentRange) {
+		return false;
+	}
+
+	if (value <= ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD * valueLower) {
+		ADC_AutoRange_setRange(channelIndex, currentRange - 1);
+	}
+
+	return true;
+}
+
+bool ADC_AutoRange_TestBetween(float value, int channelIndex, uint8_t currentRange, float valueLower, float valueUpper) {
+	if (ADC_AutoRange_currentRange[channelIndex] != currentRange) {
+		return false;
+	}
+
+	if (value <= ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD * valueLower) {
+		ADC_AutoRange_setRange(channelIndex, currentRange - 1);
+	} else if (value > ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD * valueUpper) {
+		ADC_AutoRange_setRange(channelIndex, currentRange + 1);
+	}	
+	
+	return true;
+}
+
+bool ADC_AutoRange_TestUpper(float value, int channelIndex, uint8_t currentRange, float valueUpper) {
+	if (ADC_AutoRange_currentRange[channelIndex] != currentRange) {
+		return false;
+	}
+
+	if (value > ADC_AUTO_RANGE_CHANGE_VALUE_PERCENT_THRESHOLD * valueUpper) {
+		ADC_AutoRange_setRange(channelIndex, currentRange + 1);
+	}
+
+	return true;
+}
+
+void ADC_AutoRange_AFE1_AIN12_Voltage(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLowest(value, channelIndex, 2, 2.4f)) {
+		return;
+	}
+
+	if (ADC_AutoRange_TestLower(value, channelIndex, 2, 48.0f)) {
+		return;
+	} 
+	
+	if (ADC_AutoRange_TestBetween(value, channelIndex, 1, 2.4f, 48.0f)) {
+		return;
+	}
+	
+	ADC_AutoRange_TestUpper(value, channelIndex, 0, 2.4f);
+}
+
+void ADC_AutoRange_AFE1_AIN34_Voltage(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLower(value, channelIndex, 1, 2.4f)) {
+		return;
+	} 
+
+	ADC_AutoRange_TestUpper(value, channelIndex, 0, 2.4f);
+}
+
+void ADC_AutoRange_AFE1_AIN34_Current(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLowest(value, channelIndex, 2, 0.048f)) {
+		return;
+	}
+
+	if (ADC_AutoRange_TestLower(value, channelIndex, 2, 1.2f)) {
+		return;
+	} 
+	
+	if (ADC_AutoRange_TestBetween(value, channelIndex, 1, 0.048f, 1.2f)) {
+		return;
+	}
+	
+	ADC_AutoRange_TestUpper(value, channelIndex, 0, 0.048f);
+}
+
+void ADC_AutoRange_AFE3_AIN1(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLower(value, 0, 1, 50.0f)) {
+		return;
+	} 
+
+	ADC_AutoRange_TestUpper(value, 0, 0, 50.0f);
+}
+
+void ADC_AutoRange_AFE3_AIN2(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLower(value, 1, 1, 1.0f)) {
+		return;
+	} 
+
+	ADC_AutoRange_TestUpper(value, 1, 0, 1.0f);
+}
+
+void ADC_AutoRange_AFE3_AIN3(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLowest(value, 2, 2, 2.4f)) {
+		return;
+	}
+
+	if (ADC_AutoRange_TestLower(value, 2, 2, 48.0f)) {
+		return;
+	} 
+	
+	if (ADC_AutoRange_TestBetween(value, 2, 1, 2.4f, 48.0f)) {
+		return;
+	}
+	
+	ADC_AutoRange_TestUpper(value, 2, 0, 2.4f);
+}
+
+void ADC_AutoRange_AFE3_AIN4(int channelIndex, float value) {
+	if (ADC_AutoRange_TestLowest(value, 3, 2, 0.024f)) {
+		return;
+	}
+
+	if (ADC_AutoRange_TestLower(value, 3, 2, 1.2f)) {
+		return;
+	} 
+	
+	if (ADC_AutoRange_TestBetween(value, 3, 1, 0.024f, 1.2f)) {
+		return;
+	}
+	
+	ADC_AutoRange_TestUpper(value, 3, 0, 0.024f);
+}
+
+void ADC_doAutoRange(int channelIndex, void (*func)(int, float)) {
+	if (g_adcMovingAverage[channelIndex].getNumSamples() >= g_adcMovingAverage[channelIndex].getN()) {
+		auto div = 1 << (IS_24_BIT ? 23 : 15);
+		auto sample = float(ADC_factor[channelIndex] * (int32_t)g_adcMovingAverage[channelIndex] / div);
+		auto range = ADC_AutoRange_currentRange[channelIndex];
+
+		g_debugVar2 = g_adcMovingAverage[channelIndex].getN();
+
+		float value = fabs(remap(sample, ADC_calPoints[channelIndex].p1CalX, ADC_calPoints[channelIndex].p1CalY, ADC_calPoints[channelIndex].p2CalX, ADC_calPoints[channelIndex].p2CalY));
+
+		func(channelIndex, value);
+
+		if (range != ADC_AutoRange_currentRange[channelIndex]) {
+			if (g_samples) {
+				g_samples[channelIndex] = sample;
+				g_ranges[channelIndex] = range;
+			}
+		}
+	}
+}
+
+void ADC_autoRange() {
+	if (g_afeVersion == 1) {
+		if (currentState.ain[0].mode == MEASURE_MODE_VOLTAGE && currentState.ain[0].range == 3) {
+			ADC_doAutoRange(0, ADC_AutoRange_AFE1_AIN12_Voltage);
+		}
+
+		if (currentState.ain[1].mode == MEASURE_MODE_VOLTAGE && currentState.ain[1].range == 3) {
+			ADC_doAutoRange(1, ADC_AutoRange_AFE1_AIN12_Voltage);
+		}
+
+		if (currentState.ain[2].mode == MEASURE_MODE_VOLTAGE) {
+			if (currentState.ain[2].range == 2) {
+				ADC_doAutoRange(2, ADC_AutoRange_AFE1_AIN34_Voltage);
+			}
+		} else {
+			if (currentState.ain[2].range == 3) {
+				ADC_doAutoRange(2, ADC_AutoRange_AFE1_AIN34_Current);
+			}
+		}
+
+		if (currentState.ain[3].mode == MEASURE_MODE_VOLTAGE) {
+			if (currentState.ain[3].range == 2) {
+				ADC_doAutoRange(3, ADC_AutoRange_AFE1_AIN34_Voltage);
+			}
+		} else {
+			if (currentState.ain[3].range == 3) {
+				ADC_doAutoRange(3, ADC_AutoRange_AFE1_AIN34_Current);
+			}
+		}
+	} else if (g_afeVersion == 3) {
+		if (currentState.ain[0].range == 2) {
+			ADC_doAutoRange(0, ADC_AutoRange_AFE3_AIN1);
+		}
+
+		if (currentState.ain[1].range == 2) {
+			ADC_doAutoRange(1, ADC_AutoRange_AFE3_AIN2);
+		}
+
+		if (currentState.ain[2].range == 3) {
+			ADC_doAutoRange(2, ADC_AutoRange_AFE3_AIN3);
+		}
+
+		if (currentState.ain[3].range == 3) {
+			ADC_doAutoRange(3, ADC_AutoRange_AFE3_AIN4);
+		}
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 void ADC_DLOG_Start(Request &request, Response &response) {
 	ADC_StopMeasuring();
 
@@ -808,6 +1102,27 @@ void ADC_DLOG_Start(Request &request, Response &response) {
 
 	ADC_DLOG_started = true;
 
+	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
+		uint16_t numSamples = (uint16_t)roundf(currentState.ain[channelIndex].nplc * (1000.0f / currentState.powerLineFrequency));
+		if (numSamples < 1) {
+			numSamples = 1;
+		}
+		if (numSamples > ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES) {
+			numSamples = ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES;
+		}
+
+		ADC_UpdateChannel(
+			channelIndex,
+			currentState.ain[channelIndex].mode,
+			currentState.ain[channelIndex].range,
+			numSamples,
+			currentState.ain[channelIndex].p1CalX,
+			currentState.ain[channelIndex].p1CalY,
+			currentState.ain[channelIndex].p2CalX,
+			currentState.ain[channelIndex].p2CalY
+		);
+	}
+
 	FuncGen_SetParams(currentState);
 
 	ADC_StartMeasuring();
@@ -824,19 +1139,18 @@ void ADC_DLOG_Stop(Request &request, Response &response) {
 	ADC_StartMeasuring();
 }
 
-void ADC_GetSamples(float *samples) {
+void ADC_GetSamples(float *samples, uint8_t *ranges) {
 	if (g_afeVersion != 4) {
-		if (IS_24_BIT) {
-			samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 23));
-			samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 23));
-			samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 23));
-			samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 23));
-		} else {
-			samples[0] = float(ADC_factor[0] * (int32_t)g_adcMovingAverage[0] / (1 << 15));
-			samples[1] = float(ADC_factor[1] * (int32_t)g_adcMovingAverage[1] / (1 << 15));
-			samples[2] = float(ADC_factor[2] * (int32_t)g_adcMovingAverage[2] / (1 << 15));
-			samples[3] = float(ADC_factor[3] * (int32_t)g_adcMovingAverage[3] / (1 << 15));
+		auto div = 1 << (IS_24_BIT ? 23 : 15);
+		for (int i = 0; i < 4; i++) {
+			if (g_adcMovingAverage[i].getNumSamples() > 0) {
+				samples[i] = float(ADC_factor[i] * (int32_t)g_adcMovingAverage[i] / div);
+				ranges[i] = ADC_AutoRange_currentRange[i];
+			}
 		}
+
+		g_samples = samples;
+		g_ranges = ranges;
 	}
 }
 
@@ -881,7 +1195,7 @@ void ADC_Tick(float period) {
 	int32_t ADC_ch[4];
 
 	if (g_afeVersion == 2) {
-		ADC_autoRange = READ_PIN(GPIOD, GPIO_PIN_5) | (READ_PIN(GPIOC, GPIO_PIN_2) << 1);
+		ADC_autoRangeAFE2 = READ_PIN(GPIOD, GPIO_PIN_5) | (READ_PIN(GPIOC, GPIO_PIN_2) << 1);
 	}
 
 	if (IS_24_BIT) {
@@ -939,7 +1253,7 @@ void ADC_Tick(float period) {
 	}
 
 	if (g_afeVersion == 3) {
-		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOG, GPIO_PIN_15) << 1);
+		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOC, GPIO_PIN_15) << 1);
 	}
 
 	if (currentState.acAnalysisEnabled) {

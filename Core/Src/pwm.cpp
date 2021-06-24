@@ -38,13 +38,13 @@ void PWM_SetParams(int i, SetParams &newState) {
 		uint32_t pulse = newDuty == 100.0f ? period + 1 : (uint32_t)roundf(period * newDuty / 100.0f);
 
 		if (i == 0) {
-			TIM4->PSC = prescaler;
-			TIM4->ARR = period;
-			TIM4->CCR1 = pulse;
+			TIM2->PSC = prescaler;
+			TIM2->ARR = period;
+			TIM2->CCR1 = pulse;
 		} else {
-			TIM4->PSC = prescaler;
-			TIM4->ARR = period;
-			TIM4->CCR2 = pulse;
+			TIM3->PSC = prescaler;
+			TIM3->ARR = period;
+			TIM3->CCR2 = pulse;
 		}
 
 	    if (i == 0) {
