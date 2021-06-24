@@ -96,7 +96,11 @@ void Command_GetState(Request &request, Response &response) {
 
 	ADC_GetSamples(response.getState.ainValues, response.getState.ainRange);
 	response.getState.ainFaultStatus = ADC_faultStatus;
-	response.getState.ainDiagStatus = ADC_diagStatus;
+	if (g_afeVersion == 3) {
+		response.getState.ainDiagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOC, GPIO_PIN_15) << 1);
+	} else {
+		response.getState.ainDiagStatus = 0xFF;
+	}
 
 	if (currentState.acAnalysisEnabled) {
 		response.getState.activePower = g_activePower;
@@ -247,7 +251,7 @@ extern "C" void loop() {
 //			break;
 //		}
 		//DIN_DLOG_LoopWrite();
-		if (!ADC_DLOG_started) {
+		if (!ADC_DLOG_started && !currentState.acAnalysisEnabled) {
 			ADC_autoRange();
 		}
 	}

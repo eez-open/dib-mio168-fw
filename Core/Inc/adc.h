@@ -4,7 +4,6 @@ void ADC_Setup();
 void ADC_SetParams(SetParams &newState);
 
 extern uint16_t ADC_faultStatus;
-extern uint8_t ADC_diagStatus;
 extern uint8_t ADC_autoRangeAFE2;
 void ADC_GetSamples(float *samples, uint8_t *ranges);
 

@@ -23,7 +23,6 @@ SPI_HandleTypeDef *hspiADC = &hspi3; // for ADC
 
 float ADC_samples[4];
 uint16_t ADC_faultStatus;
-uint8_t ADC_diagStatus;
 uint8_t ADC_autoRangeAFE2;
 
 static const uint64_t ADC_AUTO_RANGE_MIN_SAMPLES = 1;
@@ -156,6 +155,15 @@ void powerCalc(int32_t *ADC_ch, float period) {
 
 	g_voltBuffer[g_bufferIndex] = volt;
 	g_currBuffer[g_bufferIndex] = curr;
+
+	g_activePowerAcc += volt * curr;
+
+	auto t = g_bufferIndex - n / 4;
+	g_reactivePowerAcc += g_voltBuffer[t >= 0 ? t : t + n] * curr;
+
+	g_voltRMSAcc += volt * volt;
+	g_currRMSAcc += curr * curr;
+
 	g_bufferIndex++;
 	if (g_bufferIndex >= n) {
 		g_bufferIndex = 0;
@@ -175,14 +183,6 @@ void powerCalc(int32_t *ADC_ch, float period) {
 			g_periodCounter = 0;
 		}
 	}
-
-	g_activePowerAcc += volt * curr;
-
-	auto t = g_bufferIndex - n / 4;
-	g_reactivePowerAcc = g_voltBuffer[t >= 0 ? t : t + n] * curr;
-
-	g_voltRMSAcc += volt * volt;
-	g_currRMSAcc += curr * curr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -792,8 +792,11 @@ void ADC_SetParams(SetParams &newState) {
 		ADC_pga[3]
 	};
 
+	bool forceUpdate = newState.acAnalysisEnabled != currentState.acAnalysisEnabled;
+
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
 		if (
+			forceUpdate ||
 			newState.ain[channelIndex].mode != currentState.ain[channelIndex].mode ||
 			newState.ain[channelIndex].range != currentState.ain[channelIndex].range ||
 			newState.ain[channelIndex].nplc != currentState.ain[channelIndex].nplc ||
@@ -1143,7 +1146,7 @@ void ADC_GetSamples(float *samples, uint8_t *ranges) {
 	if (g_afeVersion != 4) {
 		auto div = 1 << (IS_24_BIT ? 23 : 15);
 		for (int i = 0; i < 4; i++) {
-			if (g_adcMovingAverage[i].getNumSamples() > 0) {
+			if (g_adcMovingAverage[i].getNumSamples() >= g_adcMovingAverage[i].getN()) {
 				samples[i] = float(ADC_factor[i] * (int32_t)g_adcMovingAverage[i] / div);
 				ranges[i] = ADC_AutoRange_currentRange[i];
 			}
@@ -1250,10 +1253,6 @@ void ADC_Tick(float period) {
 		g_adcMovingAverage[1](ADC_ch[1]);
 		g_adcMovingAverage[2](ADC_ch[2]);
 		g_adcMovingAverage[3](ADC_ch[3]);
-	}
-
-	if (g_afeVersion == 3) {
-		ADC_diagStatus = READ_PIN(GPIOG, GPIO_PIN_14) | (READ_PIN(GPIOC, GPIO_PIN_15) << 1);
 	}
 
 	if (currentState.acAnalysisEnabled) {

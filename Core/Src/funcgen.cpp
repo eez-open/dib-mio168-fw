@@ -19,7 +19,7 @@ extern "C" TIM_HandleTypeDef htim7;
 
 typedef float (*WaveformFunction)(float);
 
-#define DEBUG_TIMING
+//#define DEBUG_TIMING
 
 #ifdef DEBUG_TIMING
 float m_debugAOUT1;
