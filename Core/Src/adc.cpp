@@ -10,9 +10,6 @@
 
 static const int DEFAULT_SAMPLE_RATE_KSPS = 16;
 
-uint32_t g_debugVar1;
-uint32_t g_debugVar2;
-
 ////////////////////////////////////////////////////////////////////////////////
 
 static uint32_t ADC_DLOG_RECORD_SIZE_24_BIT = 14;
@@ -90,7 +87,7 @@ float remap(float x, float x1, float y1, float x2, float y2) {
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
 }
 
-void powerCalcReset() {
+void acPowerCalcReset() {
 	for (unsigned i = 0; i < sizeof(g_voltBuffer) / sizeof(float); i++) {
 		g_voltBuffer[i] = 0;
 		g_currBuffer[i] = 0;
@@ -110,7 +107,7 @@ void powerCalcReset() {
 	g_currRMS = 0;
 }
 
-void powerCalc(int32_t *ADC_ch, float period) {
+void acPowerCalc(int32_t *ADC_ch, float period) {
 	float volt;
 	float curr;
 
@@ -649,7 +646,7 @@ void ADC_UpdateChannel(
 
 	g_adcMovingAverage[channelIndex].reset(numSamples);
 
-	powerCalcReset();
+	acPowerCalcReset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -671,7 +668,7 @@ void ADC_SetSampleRate(int ksps) {
 	g_adcMovingAverage[2].reset();
 	g_adcMovingAverage[3].reset();
 
-	powerCalcReset();
+	acPowerCalcReset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -841,8 +838,6 @@ void ADC_SetParams(SetParams &newState) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void ADC_AutoRange_setRange(int channelIndex, uint8_t range) {
-	g_debugVar1 = 1;
-
 	uint8_t ADC_pga_before = ADC_pga[channelIndex];
 
 	ADC_StopMeasuring();
@@ -872,8 +867,6 @@ void ADC_AutoRange_setRange(int channelIndex, uint8_t range) {
 	}
 
 	ADC_StartMeasuring();
-
-	g_debugVar1 = 0;
 }
 
 bool ADC_AutoRange_TestLowest(float value, int channelIndex, uint8_t currentRange, float valueLowest) {
@@ -1021,8 +1014,6 @@ void ADC_doAutoRange(int channelIndex, void (*func)(int, float)) {
 		auto sample = float(ADC_factor[channelIndex] * (int32_t)g_adcMovingAverage[channelIndex] / div);
 		auto range = ADC_AutoRange_currentRange[channelIndex];
 
-		g_debugVar2 = g_adcMovingAverage[channelIndex].getN();
-
 		float value = fabs(remap(sample, ADC_calPoints[channelIndex].p1CalX, ADC_calPoints[channelIndex].p1CalY, ADC_calPoints[channelIndex].p2CalX, ADC_calPoints[channelIndex].p2CalY));
 
 		func(channelIndex, value);
@@ -1086,6 +1077,51 @@ void ADC_autoRange() {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+bool ADC_isAutoRange(int channelIndex) {
+	uint8_t mode = currentState.ain[channelIndex].mode;
+	uint8_t range = currentState.ain[channelIndex].range;
+
+	if (g_afeVersion == 1) {
+		if (channelIndex == 0 || channelIndex == 1) {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 3) {
+					return true;
+				}
+			}
+		} else {
+			if (mode == MEASURE_MODE_VOLTAGE) {
+				if (range == 2) {
+					return true;
+				}
+			} else {
+				if (range == 3) {
+					return true;
+				}
+			}
+		}
+	} else if (g_afeVersion == 3) {
+		if (channelIndex == 0) {
+			if (range == 2) {
+				return true;
+			}
+		} else if (channelIndex == 1) {
+			if (range == 2) {
+				return true;
+			}
+		} else if (channelIndex == 2) {
+			if (range == 3) {
+				return true;
+			}
+		} else {
+			if (range == 3) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
 void ADC_DLOG_Start(Request &request, Response &response) {
 	ADC_StopMeasuring();
 
@@ -1103,28 +1139,47 @@ void ADC_DLOG_Start(Request &request, Response &response) {
 	DLOG_recordSize = IS_24_BIT ? ADC_DLOG_RECORD_SIZE_24_BIT : ADC_DLOG_RECORD_SIZE_16_BIT;
 	DLOG_bufferSize = (BUFFER_SIZE / DLOG_recordSize) * DLOG_recordSize;
 
-	ADC_DLOG_started = true;
+	uint8_t ADC_pga_before[4] = {
+		ADC_pga[0],
+		ADC_pga[1],
+		ADC_pga[2],
+		ADC_pga[3]
+	};
 
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
-		uint16_t numSamples = (uint16_t)roundf(currentState.ain[channelIndex].nplc * (1000.0f / currentState.powerLineFrequency));
-		if (numSamples < 1) {
-			numSamples = 1;
-		}
-		if (numSamples > ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES) {
-			numSamples = ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES;
-		}
+		if (ADC_isAutoRange(channelIndex)) {
+			uint16_t numSamples = (uint16_t)roundf(currentState.ain[channelIndex].nplc * (1000.0f / currentState.powerLineFrequency));
+			if (numSamples < 1) {
+				numSamples = 1;
+			}
+			if (numSamples > ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES) {
+				numSamples = ADC_MOVING_AVERAGE_MAX_NUM_SAMPLES;
+			}
 
-		ADC_UpdateChannel(
-			channelIndex,
-			currentState.ain[channelIndex].mode,
-			currentState.ain[channelIndex].range,
-			numSamples,
-			currentState.ain[channelIndex].p1CalX,
-			currentState.ain[channelIndex].p1CalY,
-			currentState.ain[channelIndex].p2CalX,
-			currentState.ain[channelIndex].p2CalY
-		);
+			ADC_UpdateChannel(
+				channelIndex,
+				currentState.ain[channelIndex].mode,
+				currentState.ain[channelIndex].range,
+				numSamples,
+				currentState.ain[channelIndex].p1CalX,
+				currentState.ain[channelIndex].p1CalY,
+				currentState.ain[channelIndex].p2CalX,
+				currentState.ain[channelIndex].p2CalY
+			);
+		}
 	}
+
+	// recalc offset if PGA changed on any channel
+	if (
+		ADC_pga_before[0] != ADC_pga[0] ||
+		ADC_pga_before[1] != ADC_pga[1] ||
+		ADC_pga_before[2] != ADC_pga[2] ||
+		ADC_pga_before[3] != ADC_pga[3]
+	) {
+		ADC_OffsetCalc_Command();
+	}
+
+	ADC_DLOG_started = true;
 
 	FuncGen_SetParams(currentState);
 
@@ -1246,7 +1301,7 @@ void ADC_Tick(float period) {
 	// 1ksps
 	static float g_adcMovingAverageACC;
 	g_adcMovingAverageACC += period;
-	if (++g_adcMovingAverageACC >= 0.001f) {
+	if (g_adcMovingAverageACC >= 0.001f) {
 		g_adcMovingAverageACC -= 0.001f;
 
 		g_adcMovingAverage[0](ADC_ch[0]);
@@ -1256,7 +1311,7 @@ void ADC_Tick(float period) {
 	}
 
 	if (currentState.acAnalysisEnabled) {
-		powerCalc(ADC_ch, period);
+		acPowerCalc(ADC_ch, period);
 	}
 }
 
