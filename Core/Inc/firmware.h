@@ -67,7 +67,6 @@ struct DlogState {
 struct WaveformParameters {
 	Waveform waveform;
 	float frequency;
-	uint8_t resetPhase;
 	float phaseShift;
 	float amplitude;
 	float offset;
