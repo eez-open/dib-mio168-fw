@@ -92,11 +92,7 @@ float sineHalfRectifiedf(float t) {
 }
 
 float sineFullRectifiedf(float t) {
-	if (t < M_PI_F) {
-		return 2.0f * sinf(t);
-	}
-
-	return 2.0f * sinf(t - M_PI_F);
+	return 2.0f * sinf(t / 2.0f);
 }
 
 float trianglef(float t) {
