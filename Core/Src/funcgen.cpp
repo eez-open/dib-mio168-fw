@@ -239,7 +239,12 @@ void FuncGen_DOUT(int i) {
 	}
 
 	g_dutyCycle = g_pCurrentState->doutDutyCycles[i];
-	float value = g_pCurrentState->doutWaveFormFunc[i](g_pCurrentState->doutPhi[i]);
+	float value;
+	if (waveformParameters.waveform == WAVEFORM_DC) {
+		value = waveformParameters.amplitude;
+	} else {
+		value = g_pCurrentState->doutWaveFormFunc[i](g_pCurrentState->doutPhi[i]);
+	}
 
 	g_pCurrentState->doutPhi[i] += g_pCurrentState->doutDphi[i];
 	if (g_pCurrentState->doutPhi[i] >= 2.0f * M_PI_F) {
