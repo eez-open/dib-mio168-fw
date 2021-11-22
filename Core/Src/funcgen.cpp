@@ -38,9 +38,14 @@ float m_debugTotal;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#define normalize(value) ((value) - (floorf((value) / (2 * M_PI_F)) * (2 * M_PI_F)))
+
+////////////////////////////////////////////////////////////////////////////////
+
 typedef void (*TimerTickFunc)(void);
 
 struct State {
+	
 	////////////////////////////////////////////////////////////////////////////////
 
 	WaveformFunction aoutWaveFormFunc[4];
@@ -50,6 +55,7 @@ struct State {
 
 	float aoutPhi[4];
 	float aoutDphi[4];
+	int aoutCounter[4];
 
 	float aoutDutyCycles[4];
 
@@ -61,6 +67,7 @@ struct State {
 
 	float doutPhi[8];
 	float doutDphi[8];
+	int doutCounter;
 
 	float doutDutyCycles[8];
 
@@ -167,17 +174,16 @@ WaveformFunction getWaveformFunction(WaveformParameters &waveformParameters) {
 void FuncGen_AOUT(int i) {
 	auto &waveformParameters = g_pCurrentState->aoutWaveformParameters[i];
 
+	float phi = g_pCurrentState->aoutPhi[i] + g_pCurrentState->aoutCounter[i] * g_pCurrentState->aoutDphi[i];
+	phi = normalize(phi);
+	g_pCurrentState->aoutCounter[i]++;
+
 	g_dutyCycle = g_pCurrentState->aoutDutyCycles[i];
 	float value;
 	if (waveformParameters.waveform == WAVEFORM_DC) {
 		value = waveformParameters.amplitude;
 	} else {
-		value = waveformParameters.offset + waveformParameters.amplitude * g_pCurrentState->aoutWaveFormFunc[i](g_pCurrentState->aoutPhi[i]) / 2.0f;
-	}
-
-	g_pCurrentState->aoutPhi[i] += g_pCurrentState->aoutDphi[i];
-	if (g_pCurrentState->aoutPhi[i] >= 2.0f * M_PI_F) {
-		g_pCurrentState->aoutPhi[i] -= 2.0f * M_PI_F;
+		value = waveformParameters.offset + waveformParameters.amplitude * g_pCurrentState->aoutWaveFormFunc[i](phi) / 2.0f;
 	}
 
 	value = 65535.0f * (value - g_pCurrentState->aoutMin[i] ) / g_pCurrentState->aoutScale[i];
@@ -238,17 +244,15 @@ void FuncGen_DOUT(int i) {
 		return;
 	}
 
+	float phi = g_pCurrentState->doutPhi[i] + g_pCurrentState->doutCounter * g_pCurrentState->doutDphi[i];
+	phi = normalize(phi);
+
 	g_dutyCycle = g_pCurrentState->doutDutyCycles[i];
 	float value;
 	if (waveformParameters.waveform == WAVEFORM_DC) {
 		value = waveformParameters.amplitude;
 	} else {
-		value = g_pCurrentState->doutWaveFormFunc[i](g_pCurrentState->doutPhi[i]);
-	}
-
-	g_pCurrentState->doutPhi[i] += g_pCurrentState->doutDphi[i];
-	if (g_pCurrentState->doutPhi[i] >= 2.0f * M_PI_F) {
-		g_pCurrentState->doutPhi[i] -= 2.0f * M_PI_F;
+		value = g_pCurrentState->doutWaveFormFunc[i](phi);
 	}
 
 	Dout_SetPinState(i, value > 0.5f ? 1 : 0);
@@ -265,6 +269,8 @@ void FuncGen_DOUT() {
 	FuncGen_DOUT(5);
 	FuncGen_DOUT(6);
 	FuncGen_DOUT(7);
+
+	g_pCurrentState->doutCounter++;
 
 	TIMING_END(m_debugDOUT);
 }
@@ -839,6 +845,8 @@ void FuncGen_SetParams(SetParams &newParams) {
 
 			pNewState->aoutMin[i] = min;
 			pNewState->aoutScale[i] = max - min;
+
+			pNewState->aoutCounter[i] = 0;
 		}
 	}
 
@@ -855,6 +863,8 @@ void FuncGen_SetParams(SetParams &newParams) {
 			pNewState->doutDphi[i] = 2.0 * M_PI * waveformParameters.frequency * doutPeriod;
 		}
 	}
+
+	pNewState->doutCounter = 0;
 
 	memcpy(pNewState->doutWaveformParameters, newParams.doutWaveformParameters, sizeof(newParams.doutWaveformParameters));
 
