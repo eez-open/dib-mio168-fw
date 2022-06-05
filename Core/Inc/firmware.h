@@ -177,6 +177,9 @@ struct Response {
             float reactivePower;
             float voltRMS;
             float currRMS;
+            float Ah;
+            float Wh;
+            float runningTime;
             DlogState dlogState;
         } getState;
 

@@ -21,3 +21,6 @@ extern float g_activePower;
 extern float g_reactivePower;
 extern float g_voltRMS;
 extern float g_currRMS;
+extern double g_Mt; // Measured time of Ah/Wh
+extern double g_Ah;
+extern double g_Wh;
