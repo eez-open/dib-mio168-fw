@@ -64,6 +64,10 @@ int g_DMA;
 //
 // Power calc
 //
+enum {
+    AC_ANALYSIS_CHANNEL_P1,
+    AC_ANALYSIS_CHANNEL_P2
+};
 
 static float g_voltBuffer[64 * 1000 / 50];
 static float g_currBuffer[64 * 1000 / 50];
@@ -83,6 +87,7 @@ float g_reactivePower;
 float g_voltRMS;
 float g_currRMS;
 
+/* See TODO not below
 struct AccurateSum {
 	float sum;
 	float cs;  // first order correction term for lost low order bits
@@ -90,19 +95,26 @@ struct AccurateSum {
 	float c;
 	float cc;
 };
+*/
 
-static AccurateSum s_Mt;
+//static AccurateSum s_Mt;
 double g_Mt;
 
-static AccurateSum s_AhRaw;
+//static AccurateSum s_AhRaw;
 double g_Ah;
 
-static AccurateSum s_WhRaw;
+//static AccurateSum s_WhRaw;
 double g_Wh;
 
 float remap(float x, float x1, float y1, float x2, float y2) {
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
 }
+/*
+  TODO: implement an precise acuumulation using single precision floating point.
+  This codeblock is a first (non working) start.
+
+  Until now a simple double FP sum is used. This is a software operation because
+  MCU only has single precision FP.
 
 void SumAccurateZero(AccurateSum& z) {
 	z.sum = 0;
@@ -111,7 +123,7 @@ void SumAccurateZero(AccurateSum& z) {
 	z.c = 0;
 	z.cc = 0;
 }
-
+  
 // Implemenation of KahanBabhushkaKleinSum pseudo algorithm from
 // https://en.wikipedia.org/wiki/Kahan_summation_algorithm
 float SumAccurate(float input, AccurateSum& asum) {
@@ -150,6 +162,7 @@ float SumAccurate(float input, AccurateSum& asum) {
 
 	return asum.sum + asum.cs + asum.ccs;
 }
+*/
 
 void acPowerCalcReset() {
 	for (unsigned i = 0; i < sizeof(g_voltBuffer) / sizeof(float); i++) {
@@ -170,13 +183,13 @@ void acPowerCalcReset() {
 	g_voltRMS = 0;
 	g_currRMS = 0;
 
-	SumAccurateZero(s_Mt);
+	//SumAccurateZero(s_Mt);
 	g_Mt = 0.0; 
 
-	SumAccurateZero(s_AhRaw);
+	//SumAccurateZero(s_AhRaw);
 	g_Ah = 0.0;
 
-	SumAccurateZero(s_WhRaw);
+	//SumAccurateZero(s_WhRaw);
 	g_Wh = 0.0;
 }
 
@@ -185,38 +198,56 @@ void acPowerCalc(int32_t *ADC_ch, float period) {
 	float curr;
 
 	if (g_afeVersion == 1) {
+		uint8_t vc = 0;
+		uint8_t cc = 2;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 1;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[2].p1CalX, ADC_calPoints[2].p1CalY, ADC_calPoints[2].p2CalX, ADC_calPoints[2].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else if (g_afeVersion == 2) {
+		uint8_t vc = 0;
+		uint8_t cc = 2;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 1;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else if (g_afeVersion == 3) {
+		uint8_t vc = 0;
+		uint8_t cc = 1;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 2;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[1] * ADC_ch[1] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[1] * ADC_ch[1] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else {
 		return;
 	}
@@ -869,7 +900,8 @@ void ADC_SetParams(SetParams &newState) {
 		ADC_pga[3]
 	};
 
-	bool forceUpdate = newState.acAnalysisEnabled != currentState.acAnalysisEnabled;
+	bool forceUpdate = (newState.acAnalysisEnabled != currentState.acAnalysisEnabled ||
+						newState.acChannel != currentState.acChannel);
 
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
 		if (

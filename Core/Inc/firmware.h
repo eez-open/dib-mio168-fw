@@ -91,6 +91,7 @@ struct SetParams {
     } ain[4];
 
     uint8_t acAnalysisEnabled;
+    uint8_t acChannel;
 
     uint8_t powerLineFrequency; // 50 or 60
 
