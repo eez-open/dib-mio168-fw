@@ -87,82 +87,13 @@ float g_reactivePower;
 float g_voltRMS;
 float g_currRMS;
 
-/* See TODO not below
-struct AccurateSum {
-	float sum;
-	float cs;  // first order correction term for lost low order bits
-	float ccs; // second order correction term for lost low order bits
-	float c;
-	float cc;
-};
-*/
-
-//static AccurateSum s_Mt;
-double g_Mt;
-
-//static AccurateSum s_AhRaw;
+double g_Mt; // sum of measured periods
 double g_Ah;
-
-//static AccurateSum s_WhRaw;
 double g_Wh;
 
 float remap(float x, float x1, float y1, float x2, float y2) {
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
 }
-/*
-  TODO: implement an precise acuumulation using single precision floating point.
-  This codeblock is a first (non working) start.
-
-  Until now a simple double FP sum is used. This is a software operation because
-  MCU only has single precision FP.
-
-void SumAccurateZero(AccurateSum& z) {
-	z.sum = 0;
-	z.cs = 0;
-	z.ccs = 0;
-	z.c = 0;
-	z.cc = 0;
-}
-  
-// Implemenation of KahanBabhushkaKleinSum pseudo algorithm from
-// https://en.wikipedia.org/wiki/Kahan_summation_algorithm
-float SumAccurate(float input, AccurateSum& asum) {
-	volatile float t = asum.sum + input;
-	// y,z  are intermediate volatile variable to avoid compiler optimation
-	// (associative reordering) causing unwanted rounding.
-	if (abs(asum.sum) >= abs(input)) {
-		volatile float y = asum.sum - t;
-		volatile float z = y + input;
-		asum.c = z;
-	} else {
-		volatile float y = input - t;
-		volatile float z = y + asum.sum;
-		asum.c = z;
-	}
-	asum.sum = t;
-	t = asum.cs + asum.c;
-	if (abs(asum.cs) >= abs(asum.c)) {
-		volatile float y = asum.cs - t;
-		volatile float z = y + asum.c;
-		asum.cc = z;
-	} else {
-		volatile float y = asum.c - t;
-		volatile float z = y + asum.cs;
-		asum.cc = z;
-	}
-	asum.cs = t;
-	asum.ccs = asum.ccs + asum.cc;
-
-	// Overflow ccs to cs if possible
-	// CCS is large enough to put the most significant part in CS
-	//t = asum.cs + asum.css;
-	//if (t != asum.cs) {
-	//	asum.cs = asum.cs + asum.ccs; 
-	//} 
-
-	return asum.sum + asum.cs + asum.ccs;
-}
-*/
 
 void acPowerCalcReset() {
 	for (unsigned i = 0; i < sizeof(g_voltBuffer) / sizeof(float); i++) {
@@ -183,13 +114,8 @@ void acPowerCalcReset() {
 	g_voltRMS = 0;
 	g_currRMS = 0;
 
-	//SumAccurateZero(s_Mt);
 	g_Mt = 0.0; 
-
-	//SumAccurateZero(s_AhRaw);
 	g_Ah = 0.0;
-
-	//SumAccurateZero(s_WhRaw);
 	g_Wh = 0.0;
 }
 
@@ -265,11 +191,8 @@ void acPowerCalc(int32_t *ADC_ch, float period) {
 	g_voltRMSAcc += volt * volt;
 	g_currRMSAcc += curr * curr;
 
-//  g_Mt = SumAccurate(period, s_Mt);
 	g_Mt += period;
-//	g_Ah = SumAccurate(curr * period, s_AhRaw) / 3600;
 	g_Ah += float(curr*(period/3600));
-//	g_Wh = SumAccurate(volt * curr * period, s_WhRaw)  / 3600;
 	g_Wh += float(volt * curr * (period/3600));
 
 	g_bufferIndex++;
