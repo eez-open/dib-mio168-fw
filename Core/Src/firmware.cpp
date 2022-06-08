@@ -107,6 +107,9 @@ void Command_GetState(Request &request, Response &response) {
 		response.getState.reactivePower = g_reactivePower;
 		response.getState.voltRMS = g_voltRMS;
 		response.getState.currRMS = g_currRMS;
+		response.getState.Ah = float(g_Ah);
+		response.getState.Wh = float(g_Wh);
+		response.getState.runningTime = float(g_Mt);
 	}
 
 	memcpy(&response.getState.dlogState, &dlogState, sizeof(DlogState));

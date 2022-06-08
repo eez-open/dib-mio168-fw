@@ -64,6 +64,10 @@ int g_DMA;
 //
 // Power calc
 //
+enum {
+    AC_ANALYSIS_CHANNEL_P1,
+    AC_ANALYSIS_CHANNEL_P2
+};
 
 static float g_voltBuffer[64 * 1000 / 50];
 static float g_currBuffer[64 * 1000 / 50];
@@ -82,6 +86,10 @@ float g_activePower;
 float g_reactivePower;
 float g_voltRMS;
 float g_currRMS;
+
+double g_Mt; // sum of measured periods
+double g_Ah;
+double g_Wh;
 
 float remap(float x, float x1, float y1, float x2, float y2) {
     return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
@@ -105,6 +113,10 @@ void acPowerCalcReset() {
 	g_reactivePower = 0;
 	g_voltRMS = 0;
 	g_currRMS = 0;
+
+	g_Mt = 0.0; 
+	g_Ah = 0.0;
+	g_Wh = 0.0;
 }
 
 void acPowerCalc(int32_t *ADC_ch, float period) {
@@ -112,38 +124,56 @@ void acPowerCalc(int32_t *ADC_ch, float period) {
 	float curr;
 
 	if (g_afeVersion == 1) {
+		uint8_t vc = 0;
+		uint8_t cc = 2;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 1;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[2].p1CalX, ADC_calPoints[2].p1CalY, ADC_calPoints[2].p2CalX, ADC_calPoints[2].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else if (g_afeVersion == 2) {
+		uint8_t vc = 0;
+		uint8_t cc = 2;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 1;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[2] * ADC_ch[2] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else if (g_afeVersion == 3) {
+		uint8_t vc = 0;
+		uint8_t cc = 1;
+		if (currentState.acChannel == AC_ANALYSIS_CHANNEL_P2) {
+			vc = 2;
+			cc = 3;
+		}
 		if (IS_24_BIT) {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 23));
-			curr = float(ADC_factor[1] * ADC_ch[1] / (1 << 23));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 23));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 23));
 		} else {
-			volt = float(ADC_factor[0] * ADC_ch[0] / (1 << 15));
-			curr = float(ADC_factor[1] * ADC_ch[1] / (1 << 15));
+			volt = float(ADC_factor[vc] * ADC_ch[vc] / (1 << 15));
+			curr = float(ADC_factor[cc] * ADC_ch[cc] / (1 << 15));
 		}
 
-		volt = remap(volt, ADC_calPoints[0].p1CalX, ADC_calPoints[0].p1CalY, ADC_calPoints[0].p2CalX, ADC_calPoints[0].p2CalY);
-		curr = remap(curr, ADC_calPoints[1].p1CalX, ADC_calPoints[1].p1CalY, ADC_calPoints[1].p2CalX, ADC_calPoints[1].p2CalY);
+		volt = remap(volt, ADC_calPoints[vc].p1CalX, ADC_calPoints[vc].p1CalY, ADC_calPoints[vc].p2CalX, ADC_calPoints[vc].p2CalY);
+		curr = remap(curr, ADC_calPoints[cc].p1CalX, ADC_calPoints[cc].p1CalY, ADC_calPoints[cc].p2CalX, ADC_calPoints[cc].p2CalY);
 	} else {
 		return;
 	}
@@ -160,6 +190,10 @@ void acPowerCalc(int32_t *ADC_ch, float period) {
 
 	g_voltRMSAcc += volt * volt;
 	g_currRMSAcc += curr * curr;
+
+	g_Mt += period;
+	g_Ah += float(curr*(period/3600));
+	g_Wh += float(volt * curr * (period/3600));
 
 	g_bufferIndex++;
 	if (g_bufferIndex >= n) {
@@ -789,7 +823,8 @@ void ADC_SetParams(SetParams &newState) {
 		ADC_pga[3]
 	};
 
-	bool forceUpdate = newState.acAnalysisEnabled != currentState.acAnalysisEnabled;
+	bool forceUpdate = (newState.acAnalysisEnabled != currentState.acAnalysisEnabled ||
+						newState.acChannel != currentState.acChannel);
 
 	for (uint8_t channelIndex = 0; channelIndex < 4; channelIndex++) {
 		if (
